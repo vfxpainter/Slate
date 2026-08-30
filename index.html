@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#111214">
+<title>Slate</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app" class="app" data-pane="list" data-view-mode="list">
+
+  <!-- ============ SIDEBAR : folders ============ -->
+  <aside class="pane pane-nav" id="paneNav">
+    <header class="pane-head">
+      <button class="icon-btn only-narrow" data-act="nav-close" title="Close">&#10005;</button>
+      <div class="brand">Slate</div>
+      <button class="icon-btn" data-act="new-folder" title="New folder">&#43;</button>
+    </header>
+    <nav class="nav-scroll" id="folderTree"></nav>
+    <footer class="pane-foot">
+      <button class="ghost-btn" data-act="open-transfer">Backup &amp; transfer</button>
+      <button class="ghost-btn" data-act="open-fonts">Text &amp; font</button>
+      <button class="ghost-btn" data-act="toggle-theme" id="themeBtn">Theme</button>
+      <div class="storage-line" id="storageLine"></div>
+    </footer>
+  </aside>
+
+  <!-- ============ LIST : notes in current folder ============ -->
+  <section class="pane pane-list" id="paneList">
+    <header class="pane-head">
+      <button class="icon-btn only-narrow" data-act="nav-open" title="Folders">&#9776;</button>
+      <div class="search-wrap">
+        <input id="search" type="search" placeholder="Search notes" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="icon-btn" data-act="cycle-view" id="viewBtn" title="View: list / grid / large grid">&#9707;</button>
+      <button class="icon-btn" data-act="toggle-select" id="selectBtn" title="Select notes">&#9744;</button>
+      <div class="new-menu">
+        <button class="icon-btn primary" data-act="new-menu" title="New">&#43;</button>
+        <div class="menu" id="newMenu" hidden>
+          <button data-act="new" data-type="text"><b>Note</b><span>Long-form writing</span></button>
+          <button data-act="new" data-type="list"><b>List</b><span>Reorder &amp; cross out</span></button>
+          <button data-act="new" data-type="mindmap"><b>Mindmap</b><span>Quick node sketch</span></button>
+        </div>
+      </div>
+    </header>
+
+    <!-- bulk actions, shown only while selecting -->
+    <div class="select-bar" id="selectBar" hidden>
+      <span class="sel-count" id="selCount">0 selected</span>
+      <button class="ghost-btn" data-act="sel-all">All</button>
+      <button class="ghost-btn" data-act="sel-none">None</button>
+      <button class="ghost-btn" data-act="sel-move">Move to folder…</button>
+      <button class="ghost-btn" data-act="sel-tag">Tag…</button>
+      <button class="ghost-btn" data-act="sel-pin">Pin</button>
+      <button class="ghost-btn" data-act="sel-export">Export…</button>
+      <button class="ghost-btn danger" data-act="sel-trash">Trash</button>
+      <button class="ghost-btn" data-act="toggle-select">Done</button>
+    </div>
+
+    <div class="list-title" id="listTitle"></div>
+    <div class="note-scroll" id="noteList"></div>
+  </section>
+
+  <!-- ============ EDITOR ============ -->
+  <main class="pane pane-editor" id="paneEditor">
+    <header class="pane-head">
+      <button class="icon-btn only-narrow" data-act="editor-back" title="Back">&#8592;</button>
+      <button class="folder-chip" data-act="move" id="editorCrumb" title="Move to another folder"></button>
+      <button class="icon-btn" data-act="undo" id="undoBtn" title="Undo (Ctrl+Z)">&#8630;</button>
+      <button class="icon-btn" data-act="redo" id="redoBtn" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
+      <button class="icon-btn" data-act="add-image" title="Add image">&#128247;</button>
+      <button class="icon-btn" data-act="note-menu" title="More">&#8942;</button>
+      <div class="menu menu-right" id="noteMenu" hidden>
+        <button data-act="pin"><b>Pin / unpin</b></button>
+        <button data-act="move"><b>Move to folder…</b></button>
+        <button data-act="export-note"><b>Export this note…</b></button>
+        <button data-act="duplicate"><b>Duplicate</b></button>
+        <button data-act="lock"><b>Lock note…</b><span>Encrypt it behind a passphrase</span></button>
+        <button data-act="unlock" class="locked-item"><b>Unlock note…</b></button>
+        <button data-act="trash" class="danger"><b>Move to trash</b></button>
+        <button data-act="restore" class="hidden-item"><b>Restore</b></button>
+        <button data-act="purge" class="danger hidden-item"><b>Delete forever</b></button>
+      </div>
+    </header>
+    <div class="editor-scroll" id="editorScroll">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-mark">&#9634;</div>
+        <p>Pick a note, or start a new one.</p>
+      </div>
+      <div class="editor-body" id="editorBody" hidden>
+        <input class="note-title" id="noteTitle" placeholder="Title" autocomplete="off">
+        <div class="note-meta" id="noteMeta"></div>
+        <div class="tag-row" id="tagRow"></div>
+        <div class="gallery" id="gallery"></div>
+
+        <!-- locked -->
+        <div class="locked-panel" id="lockedPanel" hidden>
+          <div class="lock-mark">&#128274;</div>
+          <p>This note is locked. Its contents are encrypted on this device.</p>
+          <button class="btn solid" data-act="unlock">Unlock…</button>
+        </div>
+
+        <!-- text -->
+        <div class="note-text note-rich" id="noteRich" contenteditable="true"
+             spellcheck="true" data-placeholder="Write…"></div>
+        <div class="img-bar" id="imgBar" hidden>
+          <button data-act="img-align" data-align="left"   title="Wrap text on the right">&#9704;</button>
+          <button data-act="img-align" data-align="center" title="Centre, on its own line">&#9635;</button>
+          <button data-act="img-align" data-align="right"  title="Wrap text on the left">&#9706;</button>
+          <button data-act="img-align" data-align="full"   title="Full width">&#9644;</button>
+          <span class="img-bar-sep"></span>
+          <button data-act="img-smaller" title="Smaller">&#8722;</button>
+          <span class="img-size" id="imgSize">50%</span>
+          <button data-act="img-bigger" title="Bigger">&#43;</button>
+          <span class="img-bar-sep"></span>
+          <button data-act="img-remove" class="danger" title="Remove image">&#10005;</button>
+        </div>
+
+        <!-- list -->
+        <div class="list-editor" id="listEditor" hidden>
+          <button class="add-item top" data-act="add-item-top">&#43; Add item</button>
+          <div class="items" id="listItems"></div>
+          <button class="add-item" data-act="add-item">&#43; Add item</button>
+          <div class="list-tools">
+            <button class="ghost-btn" data-act="sweep-done">Move done to bottom</button>
+            <button class="ghost-btn" data-act="clear-done">Clear done</button>
+            <span class="sel-tag" id="itemSelCount" hidden></span>
+            <span class="count" id="listCount"></span>
+          </div>
+        </div>
+
+        <!-- mindmap -->
+        <div class="map-editor" id="mapEditor" hidden>
+          <div class="map-tools">
+            <button class="ghost-btn" data-act="map-add">&#43; Node</button>
+            <button class="ghost-btn" data-act="map-child">&#43; Child <kbd>Tab</kbd></button>
+            <button class="ghost-btn" data-act="map-rename">Rename <kbd>Enter</kbd></button>
+            <button class="ghost-btn" data-act="map-select-mode" id="selModeBtn">Select <kbd>drag</kbd></button>
+            <button class="ghost-btn" data-act="map-link" id="linkBtn">Link <kbd>Ctrl+L</kbd></button>
+            <button class="ghost-btn" data-act="map-image">&#128247; Image</button>
+            <button class="ghost-btn" data-act="map-image-remove" hidden>Remove image</button>
+            <button class="ghost-btn" data-act="map-unlink">Unlink</button>
+            <button class="ghost-btn" data-act="map-del">Delete <kbd>Del</kbd></button>
+            <button class="ghost-btn" data-act="map-zoom-out">&#8722;</button>
+            <button class="ghost-btn" data-act="map-zoom-in">&#43;</button>
+            <button class="ghost-btn" data-act="map-fit">Fit</button>
+            <button class="ghost-btn" data-act="map-style-toggle" id="styleBtn">Style</button>
+          </div>
+          <div class="map-style">
+            <div class="style-group">
+              <span class="style-label">Colour</span>
+              <div class="map-colors" id="mapColors" title="Colour the selected nodes"></div>
+              <label class="swatch custom" id="customSwatch" title="Custom colour">
+                <input type="color" id="customColor" value="#a8622f">
+              </label>
+              <button class="chip" data-act="map-tone-down" title="Less saturated">&#9680;</button>
+              <button class="chip" data-act="map-tone-up" title="More saturated">&#9681;</button>
+            </div>
+            <div class="style-group">
+              <span class="style-label">Shape</span>
+              <div class="map-shapes" id="mapShapes" title="Shape of the selected nodes"></div>
+            </div>
+            <div class="style-group">
+              <span class="style-label">Text</span>
+              <button class="chip" data-act="map-font-smaller" title="Smaller text">A&#8722;</button>
+              <span class="chip-val" id="mapFontVal">–</span>
+              <button class="chip" data-act="map-font-bigger" title="Bigger text">A&#43;</button>
+              <button class="chip" data-act="map-font-reset" title="Back to the app text size">Reset</button>
+            </div>
+            <div class="style-group">
+              <span class="style-label">Lines</span>
+              <select id="mapEdgeType" title="Line style — applies to the selected link, or to all"></select>
+              <button class="chip" data-act="map-line-thinner" title="Thinner">&#8722;</button>
+              <span class="chip-val" id="mapLineVal">1.8</span>
+              <button class="chip" data-act="map-line-thicker" title="Thicker">&#43;</button>
+            </div>
+            <span class="sel-tag" id="mapSelCount" hidden></span>
+          </div>
+          <div class="map-hint" id="mapHint"></div>
+          <div class="map-canvas-wrap">
+            <canvas id="mapCanvas"></canvas>
+            <textarea id="mapInlineEdit" class="map-inline" spellcheck="false" hidden></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ============ dialogs ============ -->
+<dialog id="dlg" class="dlg"><div class="dlg-inner" id="dlgInner"></div></dialog>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="filePick" accept="image/*" multiple hidden>
+<input type="file" id="bundlePick" accept="application/json,.json,.slate" hidden>
+<div id="printRoot" class="print-root"></div>
+<div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt=""></div>
+
+<script src="db.js"></script>
+<script src="history.js"></script>
+<script src="lock.js"></script>
+<script src="mindmap.js"></script>
+<script src="exporter.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
