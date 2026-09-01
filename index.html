@@ -5,7 +5,7 @@
 <!-- no maximum-scale: locking zoom stops anyone enlarging text they cannot read -->
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111214">
-<title>Slate</title>
+<title>Sulat</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -20,7 +20,7 @@
   <aside class="pane pane-nav" id="paneNav">
     <header class="pane-head">
       <button class="icon-btn only-narrow" data-act="nav-close" title="Close">&#10005;</button>
-      <div class="brand">Slate</div>
+      <div class="brand">Sulat</div>
       <button class="icon-btn" data-act="new-folder" title="New folder">&#43;</button>
     </header>
     <nav class="nav-scroll" id="folderTree"></nav>
@@ -82,6 +82,7 @@
         <button data-act="move"><b>Move to folder…</b></button>
         <button data-act="export-note"><b>Export this note…</b></button>
         <button data-act="duplicate"><b>Duplicate</b></button>
+        <button data-act="add-tag"><b>Add a tag…</b><span>Labels that cut across folders</span></button>
         <button data-act="lock"><b>Lock note…</b><span>Encrypt it behind a passphrase</span></button>
         <button data-act="unlock" class="locked-item"><b>Unlock note…</b></button>
         <button data-act="trash" class="danger"><b>Move to trash</b></button>
@@ -98,7 +99,7 @@
         <!-- a textarea, not an input: an input is single-line, so a long title
              scrolled sideways off a phone screen instead of wrapping -->
         <textarea class="note-title" id="noteTitle" placeholder="Title" rows="1"
-                  autocomplete="off" spellcheck="false"></textarea>
+                  autocomplete="off" spellcheck="false" autocapitalize="words"></textarea>
         <div class="note-meta" id="noteMeta"></div>
         <div class="tag-row" id="tagRow"></div>
         <div class="gallery" id="gallery"></div>
@@ -201,7 +202,7 @@
 <dialog id="dlg" class="dlg"><div class="dlg-inner" id="dlgInner"></div></dialog>
 <div id="toast" class="toast" hidden></div>
 <input type="file" id="filePick" accept="image/*" multiple hidden>
-<input type="file" id="bundlePick" accept="application/json,.json,.slate" hidden>
+<input type="file" id="bundlePick" accept="application/json,.json,.sulat,.slate" hidden>
 <div id="printRoot" class="print-root"></div>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt=""></div>
 

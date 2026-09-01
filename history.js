@@ -1,4 +1,4 @@
-/* Slate - undo / redo.
+/* Sulat - undo / redo.
 
    Every reversible action is stored as two lists of record snapshots: what the
    affected rows looked like before, and what they look like after. A record is

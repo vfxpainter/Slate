@@ -1,4 +1,4 @@
-/* Slate - app controller.
+/* Sulat - app controller.
    State lives in memory and is mirrored to IndexedDB on a debounce. The three
    panes (folders / list / editor) are re-rendered from that state; on narrow
    screens only one is visible at a time via [data-pane] on the shell.
@@ -27,6 +27,8 @@
     editingNode: null,    // node whose text is being edited on the canvas
     font: { family: 'system', size: 16 },
     dateFormat: 'relative',
+    uiScale: 100,         // per cent; scales the interface, this app only
+    uiFont: 'system',     // typeface for menus, lists and buttons
     exportDates: true,    // include the "edited ..." line in exports
     imgURL: {},           // imageId -> object URL
     saveTimer: null,
@@ -72,6 +74,12 @@
     var d = new Date(ts);
     var fmt = (opts && opts.format) || S.dateFormat || 'relative';
     var withTime = opts && opts.time;
+    // "full" always spells the date out. The relative style says "2:10 PM" for
+    // anything today, which is no use on a note you are trying to date.
+    if (opts && opts.full) {
+      withTime = true;
+      if (fmt === 'relative') fmt = 'mdy';
+    }
     var time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
     if (fmt === 'relative') {
@@ -109,6 +117,25 @@
 
   function fontStack() { return (FONTS[S.font.family] || FONTS.system).stack; }
 
+  var SCALE_MIN = 85, SCALE_MAX = 175;
+
+  /* Almost every size in the stylesheet is in rem, so setting the root font
+     size scales the whole interface at once -- and only this app, unlike the
+     phone's system-wide font setting. */
+  function uiFontStack() { return (FONTS[S.uiFont] || FONTS.system).stack; }
+
+  function applyUiFont() {
+    document.documentElement.style.setProperty('--font-ui', uiFontStack());
+    try { localStorage.setItem('slate-uifont', S.uiFont); } catch (e) { /* private mode */ }
+  }
+
+  function applyUiScale() {
+    var pct = Math.max(SCALE_MIN, Math.min(SCALE_MAX, S.uiScale || 100));
+    document.documentElement.style.fontSize = (16 * pct / 100) + 'px';
+    try { localStorage.setItem('slate-uiscale', String(pct)); } catch (e) { /* private mode */ }
+    if (S.note) autosize($('noteTitle'));
+  }
+
   // One setting drives note text, list items, mindmap nodes and exports.
   function applyFont() {
     var root = document.documentElement;
@@ -136,6 +163,10 @@
         };
       }
     } catch (e) { /* keep the default */ }
+    var uf = localStorage.getItem('slate-uifont');
+    if (uf && FONTS[uf]) S.uiFont = uf;
+    var us = parseInt(localStorage.getItem('slate-uiscale'), 10);
+    if (us) S.uiScale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, us));
     var df = localStorage.getItem('slate-dateformat');
     if (df && DATE_FORMATS[df]) S.dateFormat = df;
     var ed = localStorage.getItem('slate-exportdates');
@@ -917,16 +948,21 @@
       chip.appendChild(x);
       row.appendChild(chip);
     });
-    var add = el('button', 'tag-add', '＋ Tag');
-    add.dataset.act = 'add-tag';
-    row.appendChild(add);
+    // Only offer the inline button once tags are actually in use. Otherwise it
+    // is a control most people never want, sitting under every single title.
+    // "Add a tag…" in the ⋮ menu is always there for the first one.
+    if (tagsOf(S.note).length) {
+      var add = el('button', 'tag-add', '＋ Tag');
+      add.dataset.act = 'add-tag';
+      row.appendChild(add);
+    }
   }
 
   function renderMeta() {
     if (!S.note) return;
     var n = S.note;
     var bits = [n.type === 'mindmap' ? 'mindmap' : n.type,
-                'edited ' + fmtDate(n.updatedAt, { time: true })];
+                'edited ' + fmtDate(n.updatedAt, { full: true })];
     if (n.deletedAt) bits.unshift('in trash');
     if (n.pinned) bits.push('pinned');
     $('noteMeta').textContent = bits.join('  ·  ');
@@ -1921,7 +1957,7 @@
     ['md', 'Markdown', 'Plain .md, good for other apps'],
     ['txt', 'Plain text', 'No formatting at all'],
     ['html', 'Web page', 'Single .html file, images embedded'],
-    ['json', 'Slate backup', 'Everything, restorable on your other device']
+    ['json', 'Sulat backup', 'Everything, restorable on your other device']
   ];
 
   function exportDialog(title, sub, getNotes, baseName, mapOnly) {
@@ -1965,7 +2001,7 @@
               });
               return Exporter.exportNotes(notes, fmt, {
                 name: baseName, folderName: names,
-                docTitle: notes.length === 1 ? displayTitle(notes[0]) : 'Slate export',
+                docTitle: notes.length === 1 ? displayTitle(notes[0]) : 'Sulat export',
                 dates: S.exportDates,
                 mapDark: mapDark,
                 fmtDate: function (ts) { return fmtDate(ts, { time: true }); }
@@ -2128,6 +2164,19 @@
       '" step="1" value="' + S.font.size + '">' +
       '<div class="font-preview" id="fp">Sphinx of black quartz, judge my vow — 0123456789</div>' +
 
+      '<label class="fld" for="uf">Interface typeface</label>' +
+      '<select id="uf">' + FONT_KEYS.map(function (k) {
+        return '<option value="' + k + '"' + (k === S.uiFont ? ' selected' : '') + '>' +
+          esc(FONTS[k].label) + '</option>';
+      }).join('') + '</select>' +
+
+      '<label class="fld" for="us">Interface size — <b id="usv">' + S.uiScale +
+      '</b>%</label>' +
+      '<input type="range" id="us" min="' + SCALE_MIN + '" max="' + SCALE_MAX +
+      '" step="5" value="' + S.uiScale + '">' +
+      '<p class="sub tight">Menus, lists and buttons. Affects Sulat only — not ' +
+      'your other apps.</p>' +
+
       '<label class="fld" for="dfmt">Date format</label>' +
       '<select id="dfmt">' + DATE_KEYS.map(function (k) {
         return '<option value="' + k + '"' + (k === S.dateFormat ? ' selected' : '') + '>' +
@@ -2146,10 +2195,17 @@
         var fsv = root.querySelector('#fsv'), fp = root.querySelector('#fp');
         var dfmt = root.querySelector('#dfmt'), dp = root.querySelector('#dp');
         var xd = root.querySelector('#xd');
+        var us = root.querySelector('#us'), usv = root.querySelector('#usv');
+        var uf = root.querySelector('#uf');
         function live() {
           S.font = { family: ff.value, size: parseInt(fs.value, 10) };
           S.dateFormat = dfmt.value;
           S.exportDates = xd.checked;
+          S.uiScale = parseInt(us.value, 10);
+          S.uiFont = uf.value;
+          usv.textContent = S.uiScale;
+          applyUiFont();
+          applyUiScale();
           fsv.textContent = S.font.size;
           fp.style.fontFamily = fontStack();
           fp.style.fontSize = S.font.size + 'px';
@@ -2163,11 +2219,15 @@
         fs.oninput = live;
         dfmt.onchange = live;
         xd.onchange = live;
+        us.oninput = live;
+        uf.onchange = live;
         root.querySelector('[data-x="reset"]').onclick = function () {
           ff.value = 'system';
           fs.value = SIZE_DEFAULT;
           dfmt.value = 'relative';
           xd.checked = true;
+          us.value = 100;
+          uf.value = 'system';
           live();
         };
         root.querySelector('[data-x="c"]').onclick = closeDlg;
@@ -2217,20 +2277,53 @@
       .filter(function (g) { return g.length > 1; });
   }
 
-  function mergeDuplicateFolders() {
-    var groups = folderGroups();
-    if (!groups.length) { toast('No duplicate folders found.'); return; }
+  function mergeDuplicateFolders(opts) {
+    opts = opts || {};
+    if (!folderGroups().length) {
+      if (!opts.silent) toast('No duplicate folders found.');
+      return Promise.resolve(0);
+    }
 
-    // the oldest copy in each group survives; the rest fold into it
+    /* Merging two parents makes their children siblings, which can put two
+       identically named subfolders side by side that were not side by side
+       before. So this keeps going until a pass finds nothing left to merge,
+       working on a copy first and touching the real data only once at the end. */
     var survivorOf = {}, doomedIds = [];
-    groups.forEach(function (g) {
-      var sorted = g.slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
-      sorted.slice(1).forEach(function (f) { survivorOf[f.id] = sorted[0].id; doomedIds.push(f.id); });
-    });
     function resolve(id) {
       var guard = 0;
-      while (survivorOf[id] && guard++ < 10) id = survivorOf[id];
+      while (survivorOf[id] && guard++ < 32) id = survivorOf[id];
       return id;
+    }
+
+    var working = S.folders.map(function (f) {
+      return { id: f.id, name: f.name, parentId: f.parentId, createdAt: f.createdAt };
+    });
+    var pass = 0;
+    while (pass++ < 32) {
+      working.forEach(function (f) { f.parentId = f.parentId ? resolve(f.parentId) : null; });
+
+      var byKey = {};
+      working.forEach(function (f) {
+        var key = (f.parentId || '') + ' ' + String(f.name || '').trim().toLowerCase();
+        (byKey[key] = byKey[key] || []).push(f);
+      });
+      var dupes = Object.keys(byKey).map(function (k) { return byKey[k]; })
+        .filter(function (g) { return g.length > 1; });
+      if (!dupes.length) break;
+
+      dupes.forEach(function (g) {
+        // the oldest copy in each group survives; the rest fold into it
+        var sorted = g.slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+        sorted.slice(1).forEach(function (f) {
+          survivorOf[f.id] = sorted[0].id;
+          doomedIds.push(f.id);
+        });
+      });
+      working = working.filter(function (f) { return !survivorOf[f.id]; });
+    }
+    if (!doomedIds.length) {
+      if (!opts.silent) toast('No duplicate folders found.');
+      return Promise.resolve(0);
     }
 
     var affectedNotes = S.notes.filter(function (n) { return n.folderId && survivorOf[n.folderId]; });
@@ -2239,7 +2332,7 @@
       .concat(affectedFolders.map(function (f) { return { store: 'folders', id: f.id }; }))
       .concat(noteRefs(affectedNotes.map(function (n) { return n.id; })));
 
-    act('Merge duplicate folders', refs, function () {
+    return act('Merge duplicate folders', refs, function () {
       affectedNotes.forEach(function (n) { n.folderId = resolve(n.folderId); n.updatedAt = Date.now(); });
       affectedFolders.forEach(function (f) { f.parentId = resolve(f.parentId); });
       S.folders = S.folders.filter(function (f) { return doomedIds.indexOf(f.id) === -1; });
@@ -2247,6 +2340,7 @@
     }).then(function () {
       renderTree(); renderList(); renderMeta(); renderUndoButtons();
       toast('Merged ' + plural(doomedIds.length, 'duplicate folder') + ' — Ctrl+Z to undo');
+      return doomedIds.length;
     });
   }
 
@@ -2331,6 +2425,8 @@
           '<span>Fixes “Ideas” or “Work” showing up twice</span></button>' +
           '<button class="opt" data-x="dupnotes"><b>Find duplicate notes</b>' +
           '<span>For when the same note landed twice</span></button>' +
+          '<button class="opt" data-x="refresh"><b>Reload the app files</b>' +
+          '<span>If the app looks out of date after an update</span></button>' +
           '<button class="opt" data-x="persist"><b>' +
           (isP ? 'Storage is persistent' : 'Make storage persistent') + '</b><span>' +
           (isP ? 'The browser will not evict your notes' : 'Ask the browser not to evict your notes') +
@@ -2353,12 +2449,12 @@
               exportDialog('Export all notes', plural(liveNotes().length, 'note') + '.',
                 function () {
                   return liveNotes().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
-                }, 'slate-' + Exporter.stamp());
+                }, 'sulat-' + Exporter.stamp());
             };
             Exporter.listSnapshots().then(function (rows) {
               var line = root.querySelector('#snapLine');
               if (!line) return;
-              if (!rows.length) { line.textContent = 'none yet — one is kept each day you open Slate'; return; }
+              if (!rows.length) { line.textContent = 'none yet — one is kept each day you open Sulat'; return; }
               var mb = rows.reduce(function (t, r) { return t + (r.bytes || 0); }, 0) / 1048576;
               line.textContent = rows.length + ' kept, newest ' + rows[0].id +
                 ', ' + mb.toFixed(1) + ' MB total';
@@ -2384,7 +2480,7 @@
                         closeDlg();
                         toast('Preparing ' + row.id + '…');
                         Exporter.snapshotBlob(row).then(function (blob) {
-                          Exporter.download('slate-backup-' + row.id + '.json', blob);
+                          Exporter.download('sulat-backup-' + row.id + '.json', blob);
                           toast('Saved ' + row.id);
                         }).catch(function (e) { toast('Could not save: ' + e.message); });
                       };
@@ -2400,6 +2496,31 @@
             root.querySelector('[data-x="dupnotes"]').onclick = function () {
               closeDlg();
               duplicatesDialog();
+            };
+            /* The service worker serves the app from a cache so it opens offline.
+               If that cache ever gets stuck on an old build, this clears it and
+               reloads. It only touches the cached copies of the app's own files --
+               the notes live in IndexedDB and are not involved. */
+            root.querySelector('[data-x="refresh"]').onclick = function () {
+              confirmDialog('Reload the app files?',
+                'This clears the offline copy of the app and fetches it again. ' +
+                'Your notes are stored separately and are not affected.',
+                'Reload', function () {
+                  var jobs = [];
+                  if ('serviceWorker' in navigator) {
+                    jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+                      return Promise.all(regs.map(function (r) { return r.unregister(); }));
+                    }));
+                  }
+                  if (window.caches) {
+                    jobs.push(caches.keys().then(function (keys) {
+                      return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+                    }));
+                  }
+                  Promise.all(jobs)
+                    .catch(function (e) { console.warn('Sulat: cache clear —', e.message); })
+                    .then(function () { location.reload(); });
+                });
             };
             root.querySelector('[data-x="persist"]').onclick = function () {
               if (!navigator.storage || !navigator.storage.persist) {
@@ -2500,7 +2621,7 @@
       if (!ids.length) { toast('Select some notes first.'); return; }
       exportDialog('Export ' + plural(ids.length, 'note'), 'Pick a format.', function () {
         return ids.map(byNoteId).filter(Boolean);
-      }, 'slate-' + Exporter.stamp());
+      }, 'sulat-' + Exporter.stamp());
     },
     'sel-trash': function () {
       var ids = pickedIds();
@@ -2596,7 +2717,7 @@
         // address it is missing. Say which of the two it actually is.
         toast(window.isSecureContext
           ? 'This browser has no encryption support, so notes cannot be locked.'
-          : 'Locking needs a secure connection. Open Slate over https (or on ' +
+          : 'Locking needs a secure connection. Open Sulat over https (or on ' +
             'localhost) rather than this http address.');
         return;
       }
@@ -2728,7 +2849,7 @@
       closeMenus();
       var n = S.note;
       confirmDialog('Delete forever?',
-        'Removes the note from this device. Undo can still bring it back until you close Slate.',
+        'Removes the note from this device. Undo can still bring it back until you close Sulat.',
         'Delete forever', function () {
           act('Delete note', noteRefs([n.id]), function () {
             S.notes = S.notes.filter(function (x) { return x.id !== n.id; });
@@ -2742,7 +2863,7 @@
       var doomed = S.notes.filter(function (n) { return n.deletedAt; });
       if (!doomed.length) return;
       confirmDialog('Empty the trash?',
-        plural(doomed.length, 'note') + ' removed. Undo still works until you close Slate.',
+        plural(doomed.length, 'note') + ' removed. Undo still works until you close Sulat.',
         'Empty trash', function () {
           var ids = doomed.map(function (n) { return n.id; });
           act('Empty trash', noteRefs(ids), function () {
@@ -2934,6 +3055,49 @@
         ACTIONS[act](null, target);
       }, 110);
     }, 420);
+  }
+
+  /* Swipe the folder drawer, phone only. Opening is an edge swipe so it never
+     competes with anything inside the list; closing works from anywhere on the
+     drawer. A gesture is claimed only once it is clearly sideways, so ordinary
+     up-and-down scrolling is untouched. */
+  function bindDrawerSwipe() {
+    var startX = 0, startY = 0, tracking = false, decided = false, sideways = false;
+    var EDGE = 30, THRESHOLD = 55;
+
+    function narrow() { return window.innerWidth <= 900; }
+    function isOpen() { return $('app').dataset.nav === 'open'; }
+
+    document.addEventListener('touchstart', function (e) {
+      tracking = false;
+      if (!narrow() || e.touches.length !== 1) return;
+      var el = e.target;
+      // leave the map canvas, drag handles and dialogs to their own gestures
+      if (el.closest && (el.closest('.map-canvas-wrap') || el.closest('[data-note-grip]') ||
+          el.closest('[data-grip]') || el.closest('dialog') || el.closest('input[type="range"]'))) return;
+      var t = e.touches[0];
+      if (!isOpen() && t.clientX > EDGE) return;   // opening starts at the edge only
+      startX = t.clientX; startY = t.clientY;
+      tracking = true; decided = false; sideways = false;
+    }, { passive: true });
+
+    document.addEventListener('touchmove', function (e) {
+      if (!tracking || decided || e.touches.length !== 1) return;
+      var t = e.touches[0];
+      var dx = t.clientX - startX, dy = t.clientY - startY;
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      decided = true;
+      sideways = Math.abs(dx) > Math.abs(dy) * 1.4;
+      if (!sideways) tracking = false;            // it is a scroll; hands off
+    }, { passive: true });
+
+    document.addEventListener('touchend', function (e) {
+      if (!tracking || !sideways) { tracking = false; return; }
+      tracking = false;
+      var dx = e.changedTouches[0].clientX - startX;
+      if (!isOpen() && dx > THRESHOLD) $('app').dataset.nav = 'open';
+      else if (isOpen() && dx < -THRESHOLD) delete $('app').dataset.nav;
+    }, { passive: true });
   }
 
   function closeMenus() {
@@ -3406,6 +3570,8 @@
       if (e.key === 'n' && !mod) { e.preventDefault(); newNote('text'); }
     });
 
+    bindDrawerSwipe();
+
     window.addEventListener('beforeunload', function () {
       if (S.saveTimer) flush();
     });
@@ -3448,7 +3614,7 @@
     f.id = 'seed-folder-ideas';
     var welcome = DB.blankNote('text', f.id);
     welcome.id = 'seed-note-welcome';
-    welcome.title = 'Welcome to Slate';
+    welcome.title = 'Welcome to Sulat';
     welcome.body = [
       'This is yours, offline, on this device. Nothing leaves it unless you export.',
       '',
@@ -3513,6 +3679,8 @@
     setViewMode(localStorage.getItem('slate-viewmode') || 'list');
     loadFontPref();
     applyFont();
+    applyUiFont();
+    applyUiScale();
 
     History.configure({ apply: applyRecords, onChange: renderUndoButtons });
 
@@ -3521,7 +3689,7 @@
       .then(firstRun)
       .then(DB.migrateNotes)
       .then(function (r) {
-        if (r && r.migrated) console.info('Slate: stamped', r.migrated, 'note(s) with schema', DB.SCHEMA);
+        if (r && r.migrated) console.info('Sulat: stamped', r.migrated, 'note(s) with schema', DB.SCHEMA);
         return load();          // pick the stamped records back up
       })
       .then(purgeOldTrash)
@@ -3541,13 +3709,20 @@
         return DB.collectGarbage();
       })
       .then(function () {
+        /* Fold away folders an older import duplicated. Same parent and same
+           name is unambiguous -- a folder holds no content of its own, so
+           consolidating two of them loses nothing -- which is why this does not
+           stop to ask. It goes through act(), so Ctrl+Z still undoes it. */
+        return mergeDuplicateFolders({ silent: true });
+      })
+      .then(function () {
         // a beat after opening, so it never competes with first paint
         setTimeout(function () {
           Exporter.autoBackup().then(function (r) {
             if (r && !r.skipped) {
-              console.info('Slate: daily backup kept', r.counts, Math.round(r.bytes / 1024) + ' KB');
+              console.info('Sulat: daily backup kept', r.counts, Math.round(r.bytes / 1024) + ' KB');
             }
-          }).catch(function (e) { console.warn('Slate: backup skipped —', e.message); });
+          }).catch(function (e) { console.warn('Sulat: backup skipped —', e.message); });
         }, 3000);
       })
       .catch(function (e) {
@@ -3558,7 +3733,30 @@
     setInterval(renderStorage, 20000);
 
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('sw.js').catch(function () { /* offline install unavailable */ });
+      /* The worker serves the app from a cache, so a tab that is already open
+         keeps running the old files until it is reloaded -- which is how a
+         build could sit there unnoticed. When a new worker takes over, reload
+         once so the new files are actually the ones running.
+
+         hadController distinguishes "a new build replaced the old one" from
+         "the very first worker just installed"; only the former is stale. */
+      var hadController = !!navigator.serviceWorker.controller;
+      var reloading = false;
+
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadController || reloading) return;
+        reloading = true;
+        location.reload();
+      });
+
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        reg.update();
+        // check again whenever the window comes back to the front, so a build
+        // made while it sat in the background is picked up on return
+        document.addEventListener('visibilitychange', function () {
+          if (!document.hidden) reg.update();
+        });
+      }).catch(function () { /* offline install unavailable */ });
     }
   }
 

@@ -1,4 +1,4 @@
-/* Slate - mindmap canvas.
+/* Sulat - mindmap canvas.
    Nodes are rounded rects holding wrapped text and, optionally, an image;
    edges are bezier curves that stop at the node borders so the join is
    visible. Pointer events drive pan / zoom / drag so mouse and touch behave

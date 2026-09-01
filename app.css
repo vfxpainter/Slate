@@ -1,4 +1,4 @@
-/* Slate - warm paper palette, three panes on desktop, one pane at a time on phones. */
+/* Sulat - warm paper palette, three panes on desktop, one pane at a time on phones. */
 
 :root {
   --bg: #f6f4ef;
@@ -1407,3 +1407,10 @@ body.dragging-note .card-grip { cursor: grabbing; }
   .card-bin { width: 34px; height: 34px; }
   .row .chk { flex-basis: 24px; height: 24px; }
 }
+
+/* ============ added: capitalised titles, tighter setting note ============ */
+
+/* Display only — what you typed is stored untouched, so an ALL-CAPS acronym
+   or a deliberate lowercase title is never rewritten in the data. */
+.card-title { text-transform: capitalize; }
+.dlg p.sub.tight { margin: -.5rem 0 1rem; font-size: .8rem; }

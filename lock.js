@@ -1,4 +1,4 @@
-/* Slate - locking a note.
+/* Sulat - locking a note.
 
    A locked note is genuinely encrypted, not just hidden: its text, list items,
    mindmap and attached images are packed into one payload, encrypted with

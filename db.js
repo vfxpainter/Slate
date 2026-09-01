@@ -1,9 +1,12 @@
-/* Slate — IndexedDB layer.
+/* Sulat — IndexedDB layer.
    Stores: folders, notes, images, meta.
    Images live in their own store so note records stay small and lists stay fast. */
 (function (global) {
   'use strict';
 
+  // The database name is a storage address, not a label. It stays 'slate'
+  // from before the app was renamed to Sulat -- changing it would point the
+  // app at a new, empty database and every existing note would vanish.
   var DB_NAME = 'slate';
   var DB_VERSION = 2;
 

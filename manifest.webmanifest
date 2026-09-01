@@ -1,9 +1,9 @@
 {
-  "name": "Slate — notes, lists, mindmaps",
+  "name": "Sulat — notes, lists, mindmaps",
   "id": "/",
   "lang": "en",
   "dir": "ltr",
-  "short_name": "Slate",
+  "short_name": "Sulat",
   "description": "A local-first notebook: long-form notes, reorderable checklists, quick mindmaps and images. Nothing leaves your device.",
   "start_url": ".",
   "scope": ".",

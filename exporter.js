@@ -1,11 +1,14 @@
-/* Slate - export & import.
+/* Sulat - export & import.
    PDF goes through the browser print pipeline (Save as PDF) because it gives
    real pagination and typography without shipping a PDF library. Everything
    else is generated as a Blob and downloaded. */
 (function (global) {
   'use strict';
 
-  var BUNDLE_FORMAT = 'slate-bundle';
+  var BUNDLE_FORMAT = 'sulat-bundle';
+  // 'slate-bundle' is what the app wrote before it was renamed; backups
+  // made back then must still import.
+  var BUNDLE_FORMATS = ['sulat-bundle', 'slate-bundle'];
   var BUNDLE_VERSION = 1;
 
   function esc(s) {
@@ -17,7 +20,7 @@
   function slug(s, fallback) {
     var out = String(s || '').trim().toLowerCase()
       .replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 60);
-    return out || fallback || 'slate';
+    return out || fallback || 'sulat';
   }
 
   function stamp() {
@@ -381,7 +384,7 @@
 
   function exportNotes(notes, format, opts) {
     opts = opts || {};
-    var name = opts.name || (notes.length === 1 ? slug(notes[0].title, 'note') : 'slate-' + stamp());
+    var name = opts.name || (notes.length === 1 ? slug(notes[0].title, 'note') : 'sulat-' + stamp());
 
     if (format === 'md') {
       // must not be passed straight to map(): the index would land in `opts`
@@ -396,7 +399,7 @@
     }
     if (format === 'html') {
       return resolveImages(notes).then(function (imgs) {
-        var doc = standaloneHTML(notes.length === 1 ? (notes[0].title || 'Note') : 'Slate export',
+        var doc = standaloneHTML(notes.length === 1 ? (notes[0].title || 'Note') : 'Sulat export',
           buildDocHTML(notes, imgs, opts));
         download(name + '.html', new Blob([doc], { type: 'text/html;charset=utf-8' }));
       });
@@ -441,7 +444,7 @@
       var prevTitle = document.title;
       // prefer the note's real title over the slugged download name
       var wanted = opts.docTitle ||
-        (notes.length === 1 ? (notes[0].title || 'Untitled') : 'Slate export');
+        (notes.length === 1 ? (notes[0].title || 'Untitled') : 'Sulat export');
       document.title = wanted;
 
       return new Promise(function (resolve) {
@@ -505,7 +508,7 @@
 
   function exportBundle(notesOrNull, name) {
     return buildBundle(notesOrNull).then(function (bundle) {
-      download((name || 'slate-backup-' + stamp()) + '.json',
+      download((name || 'sulat-backup-' + stamp()) + '.json',
         new Blob([JSON.stringify(bundle)], { type: 'application/json' }));
       return bundle.counts;
     });
@@ -693,8 +696,8 @@
     return file.text().then(function (txt) {
       var b;
       try { b = JSON.parse(txt); } catch (e) { throw new Error('That file is not valid JSON.'); }
-      if (!b || b.format !== BUNDLE_FORMAT) throw new Error('Not a Slate backup file.');
-      if ((b.version || 0) > BUNDLE_VERSION) throw new Error('That backup is from a newer version of Slate.');
+      if (!b || BUNDLE_FORMATS.indexOf(b.format) < 0) throw new Error('Not a Sulat backup file.');
+      if ((b.version || 0) > BUNDLE_VERSION) throw new Error('That backup is from a newer version of Sulat.');
 
       var images = (b.images || []).map(function (im) {
         return { id: im.id, blob: dataURLToBlob(im.data), type: 'image/png', w: im.w, h: im.h, createdAt: Date.now() };
