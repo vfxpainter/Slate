@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<!-- no maximum-scale: locking zoom stops anyone enlarging text they cannot read -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111214">
 <title>Slate</title>
 <link rel="manifest" href="manifest.webmanifest">
@@ -94,7 +95,10 @@
         <p>Pick a note, or start a new one.</p>
       </div>
       <div class="editor-body" id="editorBody" hidden>
-        <input class="note-title" id="noteTitle" placeholder="Title" autocomplete="off">
+        <!-- a textarea, not an input: an input is single-line, so a long title
+             scrolled sideways off a phone screen instead of wrapping -->
+        <textarea class="note-title" id="noteTitle" placeholder="Title" rows="1"
+                  autocomplete="off" spellcheck="false"></textarea>
         <div class="note-meta" id="noteMeta"></div>
         <div class="tag-row" id="tagRow"></div>
         <div class="gallery" id="gallery"></div>

@@ -311,6 +311,13 @@ button { cursor: pointer; background: none; border: 0; }
   letter-spacing: -.01em;
   padding: 0 0 .2rem;
   line-height: 1.25;
+  /* wraps and grows instead of scrolling sideways */
+  display: block;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .note-title::placeholder { color: var(--ink-3); opacity: .55; }
 
@@ -1291,3 +1298,112 @@ body.dragging-note .card-grip { cursor: grabbing; }
 
 /* the sidebar tag rows use the # glyph as their icon */
 .nav-item .ico { font-variant-numeric: tabular-nums; }
+
+/* ============ added: duplicate-notes reviewer ============ */
+
+.dupe-group {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: .55rem .65rem;
+  margin: 0 0 .6rem;
+}
+.dupe-title {
+  font-weight: 600;
+  font-size: .9rem;
+  margin: 0 0 .35rem;
+}
+.dupe-row {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .3rem 0;
+  cursor: pointer;
+  font-size: .84rem;
+}
+.dupe-row input { accent-color: var(--accent); margin-top: .2rem; flex: 0 0 auto; }
+.dupe-meta { color: var(--ink-3); flex: 0 0 auto; white-space: nowrap; }
+.dupe-snip { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* ============ added: readable sizing on a phone ============
+   The whole interface was built at desktop scale, where a 12px label sits a
+   half-metre from your eyes on a wide screen. On a handset the same label is
+   genuinely hard to read, so everything textual steps up and the rows get
+   room to breathe. Nothing here changes the desktop layout. */
+
+@media (max-width: 900px) {
+  body { font-size: 16px; }
+
+  /* form controls stay at 16px or larger: below that, mobile browsers zoom
+     the whole page in when the field takes focus */
+  #search, .dlg input[type="text"], .dlg input[type="password"], .dlg select {
+    font-size: 16px;
+    padding: .6rem .7rem;
+  }
+
+  /* note cards */
+  .card { padding: .8rem .8rem; margin-bottom: .35rem; }
+  .card-top { gap: .5rem; }
+  .card-title { font-size: 1.02rem; line-height: 1.35; }
+  .card-snip { font-size: .9rem; line-height: 1.5; margin-top: .3rem; }
+  .card-foot { margin-top: .5rem; gap: .45rem; }
+  .card-date { font-size: .8rem; }
+  .card-folder, .card-tag { font-size: .78rem; padding: .12rem .45rem; }
+  .card-kind { font-size: .95rem; }
+  .card-thumbs img { width: 30px; height: 30px; }
+
+  /* sidebar and the folder rows in the list */
+  .nav-item { font-size: .98rem; padding: .6rem .6rem; }
+  .nav-item .ico { font-size: 1.05rem; }
+  .nav-item .n { font-size: .85rem; }
+  .folder-row { font-size: .96rem; padding: .6rem .55rem; }
+  .folder-row .fr-n { font-size: .85rem; }
+  .nav-group { font-size: .74rem; padding: 1rem .7rem .4rem; }
+  .list-title { font-size: .8rem; padding: .8rem .85rem .4rem; }
+  .brand { font-size: 1.15rem; }
+
+  /* the open note */
+  .editor-body { padding: 1.1rem 1.1rem 6rem; }
+  .note-title { font-size: 1.5rem; }
+  .note-meta { font-size: .8rem; margin-bottom: 1rem; }
+  .folder-chip { font-size: .9rem; padding: .4rem .6rem; }
+
+  /* buttons, menus and dialogs */
+  .ghost-btn { font-size: .92rem; padding: .5rem .7rem; }
+  .menu { min-width: 240px; }
+  .menu button { font-size: .96rem; padding: .6rem .7rem; }
+  .menu button span { font-size: .82rem; }
+  .dlg h3 { font-size: 1.15rem; }
+  .dlg p.sub { font-size: .92rem; }
+  .btn { font-size: .95rem; padding: .6rem 1rem; }
+  .opt b { font-size: .96rem; }
+  .opt span { font-size: .82rem; }
+  .toast { font-size: .92rem; padding: .65rem 1.1rem; }
+
+  /* tags */
+  .tag-chip { font-size: .86rem; padding: .18rem .18rem .18rem .6rem; }
+  .tag-chip .tag-x { width: 22px; height: 22px; font-size: .68rem; }
+  .tag-add { font-size: .86rem; padding: .28rem .7rem; }
+
+  /* list rows */
+  .row .txt { font-size: calc(var(--content-size, 16px) * 1); }
+  .add-item { font-size: .95rem; padding: .6rem .55rem; }
+  .list-tools { gap: .4rem; }
+  .list-tools .count, .sel-tag { font-size: .84rem; }
+
+  .storage-line { font-size: .8rem; }
+  .select-bar { padding: .6rem; }
+  .sel-count { font-size: .86rem; }
+}
+
+/* very narrow handsets: keep the title from dominating the screen */
+@media (max-width: 400px) {
+  .note-title { font-size: 1.35rem; }
+  .editor-body { padding: 1rem .9rem 6rem; }
+}
+
+/* a 16px tick box is a thumb-sized miss on a phone */
+@media (max-width: 900px) {
+  .card-check { flex-basis: 24px; height: 24px; font-size: .85rem; }
+  .card-bin { width: 34px; height: 34px; }
+  .row .chk { flex-basis: 24px; height: 24px; }
+}

@@ -1,5 +1,5 @@
 /* Slate service worker — cache-first app shell so the app opens with no network. */
-var CACHE = 'slate-3a243f56c21e';
+var CACHE = 'slate-22fc59afa359';
 var SHELL = [
   './',
   'index.html',

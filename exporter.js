@@ -604,8 +604,91 @@
     });
   }
 
-  // Merge a bundle in. Ids are preserved, so re-importing the same backup
-  // updates in place instead of duplicating.
+  function folderKey(name) {
+    return String(name || '').trim().toLowerCase();
+  }
+
+  /* Decide where each incoming folder lands, without ever creating a second
+     folder that has the same name in the same place as one that already
+     exists. Two folders are "the same" purely by (parent, name) -- a folder
+     carries no content of its own, so consolidating them loses nothing.
+
+     Returns { idMap, toInsert }: idMap maps every incoming folder id to the
+     id it should actually use (an existing folder's id if it merged, or its
+     own id if it is genuinely new); toInsert lists only the rows that still
+     need to be written, with parentId already resolved to a final id. */
+  function resolveFolderMerges(existingFolders, incomingFolders) {
+    var byParent = {};                       // parentId ('' for root) -> {nameKey: id}
+    function bucket(parentId) {
+      var k = parentId || '';
+      return byParent[k] || (byParent[k] = {});
+    }
+    existingFolders.forEach(function (f) {
+      bucket(f.parentId)[folderKey(f.name)] = f.id;
+    });
+
+    var byIncomingId = {};
+    incomingFolders.forEach(function (f) { byIncomingId[f.id] = f; });
+
+    var idMap = {}, toInsert = [];
+    var pending = incomingFolders.slice();
+    var guard = 0;
+    // Parents have to be resolved before their children, so this makes
+    // repeated passes rather than assuming the array arrives in tree order.
+    while (pending.length && guard++ < 64) {
+      var next = [];
+      pending.forEach(function (f) {
+        var parentPending = f.parentId && byIncomingId[f.parentId] && !idMap.hasOwnProperty(f.parentId);
+        if (parentPending) { next.push(f); return; }
+
+        var finalParentId = (f.parentId && idMap.hasOwnProperty(f.parentId))
+          ? idMap[f.parentId] : (f.parentId || null);
+        var slot = bucket(finalParentId);
+        var key = folderKey(f.name);
+
+        if (slot[key]) {
+          idMap[f.id] = slot[key];           // an equivalent folder already exists
+        } else {
+          idMap[f.id] = f.id;                // stays new, keeps its own id
+          slot[key] = f.id;                  // so incoming siblings with the same name also merge together
+          toInsert.push({
+            id: f.id, name: f.name, parentId: finalParentId,
+            order: f.order || Date.now(), createdAt: f.createdAt || Date.now()
+          });
+        }
+      });
+      if (next.length === pending.length) {
+        // a parent cycle in the input: stop chasing it and take the rest as roots
+        next.forEach(function (f) {
+          idMap[f.id] = f.id;
+          toInsert.push({ id: f.id, name: f.name, parentId: null,
+            order: f.order || Date.now(), createdAt: f.createdAt || Date.now() });
+        });
+        next = [];
+      }
+      pending = next;
+    }
+    return { idMap: idMap, toInsert: toInsert };
+  }
+
+  // A note's content, independent of id, timestamps or which folder it is
+  // filed in -- two notes with the same fingerprint hold nothing different.
+  function noteFingerprint(n) {
+    return JSON.stringify({
+      type: n.type, title: (n.title || '').trim(),
+      body: n.body || '', bodyHtml: n.bodyHtml || '',
+      items: n.items || [], map: n.map || null,
+      images: (n.images || []).slice().sort(),
+      tags: (n.tags || []).slice().sort(),
+      enc: n.enc || null
+    });
+  }
+
+  // Merge a bundle in. A note that exists on both sides (same id) resolves to
+  // whichever copy was edited last. Folders merge by (parent, name) so
+  // importing never creates a second "Ideas" or "Work". A note that arrives
+  // under a new id but with byte-identical content to one already here is
+  // recognised as the same note rather than added again.
   function importBundle(file) {
     return file.text().then(function (txt) {
       var b;
@@ -642,39 +725,57 @@
         if (n.schema) out.schema = n.schema;
         return out;
       });
-      // Merge, don't overwrite. Importing is how two devices exchange notes, so
-      // a note that exists on both must resolve to whichever copy was edited
-      // last -- otherwise importing an older backup silently destroys newer
-      // work on the receiving device.
-      return DB.all('notes').then(function (mine) {
-        var byId = {};
-        mine.forEach(function (n) { byId[n.id] = n; });
-
-        var fresh = [], added = 0, updated = 0, kept = 0;
+      return DB.all('folders').then(function (myFolders) {
+        var fm = resolveFolderMerges(myFolders, b.folders || []);
         notes.forEach(function (n) {
-          var have = byId[n.id];
-          if (!have) { fresh.push(n); added++; return; }
-          if ((n.updatedAt || 0) > (have.updatedAt || 0)) { fresh.push(n); updated++; }
-          else { kept++; }                 // local copy is newer or identical
+          if (n.folderId && fm.idMap.hasOwnProperty(n.folderId)) n.folderId = fm.idMap[n.folderId];
         });
 
-        // image blobs are immutable and keyed by id, so only add missing ones
-        return DB.all('images').then(function (haveImgs) {
-          var known = {};
-          haveImgs.forEach(function (im) { known[im.id] = true; });
-          var newImages = images.filter(function (im) { return !known[im.id]; });
+        // Merge, don't overwrite. Importing is how two devices exchange notes,
+        // so a note that exists on both must resolve to whichever copy was
+        // edited last -- otherwise importing an older backup silently
+        // destroys newer work on the receiving device.
+        return DB.all('notes').then(function (mine) {
+          var byId = {}, fingerprints = {};
+          mine.forEach(function (n) {
+            byId[n.id] = n;
+            fingerprints[noteFingerprint(n)] = true;
+          });
 
-          return DB.putMany('folders', b.folders || [])
-            .then(function () { return DB.putMany('images', newImages); })
-            .then(function () { return DB.putMany('notes', fresh); })
-            .then(function () {
-              return {
-                notes: added + updated,
-                added: added, updated: updated, kept: kept,
-                folders: (b.folders || []).length,
-                images: newImages.length
-              };
-            });
+          var fresh = [], added = 0, updated = 0, kept = 0;
+          notes.forEach(function (n) {
+            var have = byId[n.id];
+            if (have) {
+              if ((n.updatedAt || 0) > (have.updatedAt || 0)) { fresh.push(n); updated++; }
+              else { kept++; }              // local copy is newer or identical
+              return;
+            }
+            // A different id but the same content is the same note arriving
+            // twice -- most often the untouched starter notes from an older
+            // build, before they carried a stable id of their own.
+            if (fingerprints[noteFingerprint(n)]) { kept++; return; }
+            fresh.push(n);
+            added++;
+          });
+
+          // image blobs are immutable and keyed by id, so only add missing ones
+          return DB.all('images').then(function (haveImgs) {
+            var known = {};
+            haveImgs.forEach(function (im) { known[im.id] = true; });
+            var newImages = images.filter(function (im) { return !known[im.id]; });
+
+            return DB.putMany('folders', fm.toInsert)
+              .then(function () { return DB.putMany('images', newImages); })
+              .then(function () { return DB.putMany('notes', fresh); })
+              .then(function () {
+                return {
+                  notes: added + updated,
+                  added: added, updated: updated, kept: kept,
+                  folders: fm.toInsert.length,
+                  images: newImages.length
+                };
+              });
+          });
         });
       });
     });

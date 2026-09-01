@@ -947,6 +947,7 @@
     $('app').dataset.pane = 'editor';
 
     $('noteTitle').value = n.title || '';
+    autosize($('noteTitle'));       // a wrapped title needs its height set on open
     renderMeta();
     renderTagRow();
     renderGallery();
@@ -2199,6 +2200,115 @@
     );
   }
 
+  /* ---------- cleaning up duplicates already in the library ----------
+     The fixes above stop new duplicates on import; these two put right what
+     an earlier import already did -- a folder merge is fully automatic
+     (folders hold no content of their own, so consolidating them loses
+     nothing), while notes need a human choice, since two notes that share a
+     title may hold genuinely different content one of them still cares about. */
+
+  function folderGroups() {
+    var byKey = {};
+    S.folders.forEach(function (f) {
+      var key = (f.parentId || '') + ' ' + f.name.trim().toLowerCase();
+      (byKey[key] = byKey[key] || []).push(f);
+    });
+    return Object.keys(byKey).map(function (k) { return byKey[k]; })
+      .filter(function (g) { return g.length > 1; });
+  }
+
+  function mergeDuplicateFolders() {
+    var groups = folderGroups();
+    if (!groups.length) { toast('No duplicate folders found.'); return; }
+
+    // the oldest copy in each group survives; the rest fold into it
+    var survivorOf = {}, doomedIds = [];
+    groups.forEach(function (g) {
+      var sorted = g.slice().sort(function (a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+      sorted.slice(1).forEach(function (f) { survivorOf[f.id] = sorted[0].id; doomedIds.push(f.id); });
+    });
+    function resolve(id) {
+      var guard = 0;
+      while (survivorOf[id] && guard++ < 10) id = survivorOf[id];
+      return id;
+    }
+
+    var affectedNotes = S.notes.filter(function (n) { return n.folderId && survivorOf[n.folderId]; });
+    var affectedFolders = S.folders.filter(function (f) { return f.parentId && survivorOf[f.parentId]; });
+    var refs = doomedIds.map(function (id) { return { store: 'folders', id: id }; })
+      .concat(affectedFolders.map(function (f) { return { store: 'folders', id: f.id }; }))
+      .concat(noteRefs(affectedNotes.map(function (n) { return n.id; })));
+
+    act('Merge duplicate folders', refs, function () {
+      affectedNotes.forEach(function (n) { n.folderId = resolve(n.folderId); n.updatedAt = Date.now(); });
+      affectedFolders.forEach(function (f) { f.parentId = resolve(f.parentId); });
+      S.folders = S.folders.filter(function (f) { return doomedIds.indexOf(f.id) === -1; });
+      if (doomedIds.indexOf(S.view) !== -1) S.view = 'all';
+    }).then(function () {
+      renderTree(); renderList(); renderMeta(); renderUndoButtons();
+      toast('Merged ' + plural(doomedIds.length, 'duplicate folder') + ' — Ctrl+Z to undo');
+    });
+  }
+
+  function noteGroups() {
+    var byKey = {};
+    liveNotes().forEach(function (n) {
+      var key = (n.title || '').trim().toLowerCase();
+      if (!key) return;                      // untitled notes aren't "duplicates" by name
+      (byKey[key] = byKey[key] || []).push(n);
+    });
+    return Object.keys(byKey).map(function (k) { return byKey[k]; })
+      .filter(function (g) { return g.length > 1; })
+      .sort(function (a, b) { return b.length - a.length; });
+  }
+
+  function duplicatesDialog() {
+    var groups = noteGroups();
+    if (!groups.length) { toast('No notes share a title.'); return; }
+
+    var html = '<h3>Possible duplicates</h3><p class="sub">' + plural(groups.length, 'title') +
+      ' show up more than once. Pick which copy to keep in each — the rest go to ' +
+      'the trash, so nothing is lost for good.</p>';
+    groups.forEach(function (g, gi) {
+      var sorted = g.slice().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+      html += '<div class="dupe-group"><div class="dupe-title">' +
+        esc(sorted[0].title || 'Untitled') + '</div>';
+      sorted.forEach(function (n, i) {
+        html += '<label class="dupe-row"><input type="radio" name="dg' + gi + '" value="' +
+          esc(n.id) + '"' + (i === 0 ? ' checked' : '') + '>' +
+          '<span class="dupe-meta">' + esc(KIND[n.type] || '') + ' · ' +
+          esc(fmtDate(n.updatedAt, { time: true })) + '</span>' +
+          '<span class="dupe-snip">' + esc(snippet(n).slice(0, 90)) + '</span></label>';
+      });
+      html += '</div>';
+    });
+    html += '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button>' +
+      '<button class="btn solid" data-x="k">Trash the rest</button></div>';
+
+    showDlg(html, function (root) {
+      root.querySelector('[data-x="c"]').onclick = closeDlg;
+      root.querySelector('[data-x="k"]').onclick = function () {
+        var toTrash = [];
+        groups.forEach(function (g, gi) {
+          var picked = root.querySelector('input[name="dg' + gi + '"]:checked');
+          var keepId = picked ? picked.value : g[0].id;
+          g.forEach(function (n) { if (n.id !== keepId) toTrash.push(n.id); });
+        });
+        closeDlg();
+        if (!toTrash.length) return;
+        act('Merge ' + plural(toTrash.length, 'duplicate note'), noteRefs(toTrash), function () {
+          toTrash.forEach(function (id) {
+            var n = byNoteId(id);
+            if (n) { n.deletedAt = Date.now(); n.updatedAt = Date.now(); }
+          });
+        }).then(function () {
+          renderTree(); renderList(); renderUndoButtons();
+          toast(plural(toTrash.length, 'note') + ' moved to trash — Ctrl+Z to undo');
+        });
+      };
+    });
+  }
+
   function transferDialog() {
     DB.estimate().then(function (est) {
       var used = est && est.usage ? (est.usage / 1048576).toFixed(1) + ' MB used' : 'size unknown';
@@ -2217,6 +2327,10 @@
           '<button class="opt" data-x="all"><b>Export all notes</b><span>PDF, Markdown, text or web page</span></button>' +
           '<button class="opt" data-x="snaps"><b>Daily snapshots</b>' +
           '<span id="snapLine">kept automatically on this device</span></button>' +
+          '<button class="opt" data-x="dupfolders"><b>Merge duplicate folders</b>' +
+          '<span>Fixes “Ideas” or “Work” showing up twice</span></button>' +
+          '<button class="opt" data-x="dupnotes"><b>Find duplicate notes</b>' +
+          '<span>For when the same note landed twice</span></button>' +
           '<button class="opt" data-x="persist"><b>' +
           (isP ? 'Storage is persistent' : 'Make storage persistent') + '</b><span>' +
           (isP ? 'The browser will not evict your notes' : 'Ask the browser not to evict your notes') +
@@ -2278,6 +2392,14 @@
                   }
                 );
               });
+            };
+            root.querySelector('[data-x="dupfolders"]').onclick = function () {
+              closeDlg();
+              mergeDuplicateFolders();
+            };
+            root.querySelector('[data-x="dupnotes"]').onclick = function () {
+              closeDlg();
+              duplicatesDialog();
             };
             root.querySelector('[data-x="persist"]').onclick = function () {
               if (!navigator.storage || !navigator.storage.persist) {
@@ -2961,10 +3083,22 @@
     /* --- editor inputs --- */
 
     $('noteTitle').addEventListener('input', function () {
+      autosize(this);               // grow with the text, however many lines
       if (!S.note) return;          // editor is showing its empty state
       beginBurst('Edit title');
       S.note.title = this.value;
       touch();
+    });
+    // It wraps, but it is still a title: Enter moves on rather than adding a line.
+    $('noteTitle').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!S.note) return;
+      if (S.note.type === 'text') $('noteRich').focus();
+      else if (S.note.type === 'list') {
+        var first = document.querySelector('#listItems [data-item]');
+        if (first) first.focus();
+      } else this.blur();
     });
     var rich = $('noteRich');
     rich.addEventListener('input', function () {
@@ -3305,8 +3439,15 @@
 
   function firstRun() {
     if (S.notes.length || S.folders.length) return Promise.resolve();
+    // Fixed ids, not DB.uid(): every fresh install creates this same starter
+    // content. With random ids, installing on a second device and then
+    // importing a backup duplicated all of it, because the two copies had
+    // no id in common for the merge to recognise. A stable id means they
+    // collide on purpose and the usual newer-wins import rule takes over.
     var f = DB.blankFolder('Ideas', null);
+    f.id = 'seed-folder-ideas';
     var welcome = DB.blankNote('text', f.id);
+    welcome.id = 'seed-note-welcome';
     welcome.title = 'Welcome to Slate';
     welcome.body = [
       'This is yours, offline, on this device. Nothing leaves it unless you export.',
@@ -3333,6 +3474,7 @@
     ].join('\n');
 
     var list = DB.blankNote('list', f.id);
+    list.id = 'seed-note-list';
     list.title = 'Try a list';
     list.items = [
       { id: DB.uid(), text: 'Drag the handle on the left to reorder', done: false, indent: 0 },
@@ -3343,6 +3485,7 @@
     ];
 
     var map = DB.blankNote('mindmap', f.id);
+    map.id = 'seed-note-mindmap';
     map.title = 'Try a mindmap';
     var a = { id: DB.uid(), text: 'Project', x: 0, y: 0 };
     var b = { id: DB.uid(), text: 'Research', x: 210, y: -80 };
