@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  var SAVE_DELAY = 450;
+  var SAVE_DELAY = 200;      // how long typing pauses before a write
   var TRASH_DAYS = 30;
   var VIEW_MODES = ['list', 'grid', 'large'];
 
@@ -29,7 +29,12 @@
     dateFormat: 'relative',
     uiScale: 100,         // per cent; scales the interface, this app only
     uiFont: 'system',     // typeface for menus, lists and buttons
-    exportDates: true,    // include the "edited ..." line in exports
+    exportDates: false,   // folder + date line in exports; off by default
+    sortBy: 'edited',     // edited | oldest | created | az | za | type
+    autoCaps: true,       // capitalise the start of a sentence as you type
+    autoBackup: false,    // write a backup on its own after you stop editing
+    lastAutoBackup: 0,
+    paneW: { nav: 0, list: 0 },   // 0 = let the stylesheet decide
     imgURL: {},           // imageId -> object URL
     saveTimer: null,
     installPrompt: null
@@ -144,7 +149,9 @@
     try {
       localStorage.setItem('slate-font', JSON.stringify(S.font));
       localStorage.setItem('slate-dateformat', S.dateFormat);
-      localStorage.setItem('slate-exportdates', S.exportDates ? '1' : '0');
+      localStorage.setItem('slate-exportmeta', S.exportDates ? '1' : '0');
+      localStorage.setItem('slate-sortby', S.sortBy);
+      localStorage.setItem('slate-autocaps', S.autoCaps ? '1' : '0');
     } catch (e) { /* private mode */ }
     if (S.map) S.map.setFont(fontStack(), S.font.size);
     // the rich editor grows on its own; nothing to resize
@@ -169,8 +176,23 @@
     if (us) S.uiScale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, us));
     var df = localStorage.getItem('slate-dateformat');
     if (df && DATE_FORMATS[df]) S.dateFormat = df;
-    var ed = localStorage.getItem('slate-exportdates');
+    // 'slate-exportdates' is the pre-change key. It was written as '1' on every
+    // boot, so reading it would override the new default for everyone who had
+    // ever opened the app. Read the new key only, and clear the old one.
+    try { localStorage.removeItem('slate-exportdates'); } catch (e) { /* private mode */ }
+    var ed = localStorage.getItem('slate-exportmeta');
     if (ed !== null) S.exportDates = ed !== '0';
+    var sb = localStorage.getItem('slate-sortby');
+    if (sb) S.sortBy = sb;
+    var ab = localStorage.getItem('sulat-autobackup');
+    if (ab !== null) S.autoBackup = ab === '1';
+    S.lastAutoBackup = parseInt(localStorage.getItem('sulat-lastautobackup'), 10) || 0;
+    var ac = localStorage.getItem('slate-autocaps');
+    if (ac !== null) S.autoCaps = ac !== '0';
+    try {
+      var pw = JSON.parse(localStorage.getItem('slate-panew') || 'null');
+      if (pw && typeof pw.nav === 'number') S.paneW = pw;
+    } catch (e) { /* ignore a corrupt value */ }
   }
 
   /* ================= lookups ================= */
@@ -426,9 +448,25 @@
         list = list.filter(function (n) { return searchText(n).indexOf(q) !== -1; });
       }
     }
+    /* Pinned notes stay on top whatever the sort -- that is what pinning is
+       for -- so the chosen order only decides the rest. */
+    var KIND_ORDER = { text: 0, list: 1, mindmap: 2 };
     return list.sort(function (a, b) {
-      if (S.view !== 'trash' && a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      return b.updatedAt - a.updatedAt;
+      // Compare pinned as booleans. A note that simply has no `pinned` field --
+      // an imported one, say -- is undefined, and `undefined !== false` made the
+      // comparator inconsistent, which scrambled the order for everything.
+      var ap = !!a.pinned, bp = !!b.pinned;
+      if (S.view !== 'trash' && ap !== bp) return ap ? -1 : 1;
+      switch (S.sortBy) {
+        case 'oldest':  return a.updatedAt - b.updatedAt;
+        case 'created': return (b.createdAt || 0) - (a.createdAt || 0);
+        case 'az':      return displayTitle(a).localeCompare(displayTitle(b));
+        case 'za':      return displayTitle(b).localeCompare(displayTitle(a));
+        case 'type':
+          var d = (KIND_ORDER[a.type] || 0) - (KIND_ORDER[b.type] || 0);
+          return d || (b.updatedAt - a.updatedAt);
+        default:        return b.updatedAt - a.updatedAt;
+      }
     });
   }
 
@@ -444,6 +482,7 @@
   function flush() {
     clearTimeout(S.saveTimer);
     S.saveTimer = null;
+    scheduleAutoBackup();
     if (!S.note) return Promise.resolve();
     var n = S.note;
     closeBurst();
@@ -463,7 +502,9 @@
       t.dataset.twist = opts.folderId;
       b.appendChild(t);
     }
-    b.appendChild(el('span', 'ico', opts.icon || ''));
+    var ico = el('span', 'ico', opts.icon || '');
+    if (opts.color) ico.dataset.fcolor = opts.color;
+    b.appendChild(ico);
     b.appendChild(el('span', 'name', opts.name));
     if (opts.count !== undefined && opts.count !== null) {
       b.appendChild(el('span', 'n', String(opts.count)));
@@ -513,7 +554,7 @@
         var kids = childFolders(f.id);
         var item = navItem({
           view: f.id, name: f.name, icon: '▢', count: countIn(f.id),
-          active: S.view === f.id, folderId: f.id,
+          active: S.view === f.id, folderId: f.id, color: f.color || null,
           twist: kids.length ? !!S.expanded[f.id] : undefined
         });
         item.style.paddingLeft = (0.55 + depth * 0.75) + 'rem';
@@ -610,7 +651,7 @@
     notes.forEach(function (n) {
       var picked = !!S.picked[n.id];
       var c = el('div', 'card' +
-        (S.note && S.note.id === n.id && !S.selecting ? ' active' : '') +
+        (S.note && S.note.id === n.id ? ' active' : '') +
         (picked ? ' picked' : ''));
       c.dataset.noteId = n.id;
       c.tabIndex = 0;
@@ -626,7 +667,11 @@
       box.dataset.pickNote = n.id;
       box.title = 'Select this note';
       top.appendChild(box);
-      top.appendChild(el('span', 'card-kind', n.locked ? '🔒' : (KIND[n.type] || KIND.text)));
+      var kindEl = el('span', 'card-kind ' + (n.locked ? 'k-locked' : 'k-' + n.type),
+                      n.locked ? '🔒' : (KIND[n.type] || KIND.text));
+      kindEl.title = n.locked ? 'Locked note' :
+        (n.type === 'list' ? 'List' : n.type === 'mindmap' ? 'Mindmap' : 'Note');
+      top.appendChild(kindEl);
       top.appendChild(el('span', 'card-title', displayTitle(n)));
       if (n.pinned && S.view !== 'trash') top.appendChild(el('span', 'card-pin', '⚑'));
       c.appendChild(top);
@@ -642,7 +687,14 @@
       var mixedView = S.q || S.view === 'all' || S.view === 'pinned' || S.view === 'trash';
       if (n.folderId && mixedView) {
         var fp = folderPath(n.folderId);
-        if (fp) foot.appendChild(el('span', 'card-folder', fp));
+        if (fp) {
+          var chip = el('span', 'card-folder', fp);
+          // the note inherits its folder's colour, so where it lives reads at
+          // a glance without anyone having to look at the words
+          var fc = folderColor(n.folderId);
+          if (fc) chip.dataset.fcolor = fc;
+          foot.appendChild(chip);
+        }
       }
       if ((n.images || []).length) {
         var th = el('div', 'card-thumbs');
@@ -922,12 +974,45 @@
 
   /* An untitled mindmap is named after its central idea, so exports and the
      note list show something meaningful instead of "Untitled". */
+  /* Words that carry no meaning at the front of a title. Dropping them stops
+     every third note being called "The ..." or "A ...". */
+  var TITLE_SKIP = { the: 1, a: 1, an: 1, to: 1, of: 1, and: 1, for: 1, in: 1, on: 1 };
+
+  /* A stand-in title taken from the note itself. This is the first meaningful
+     line trimmed to a sensible length -- not a summary; summarising would need
+     a language model, and this app never reaches the network. */
+  function autoTitle(n) {
+    var src = '';
+    if (n.type === 'list') {
+      var first = (n.items || []).filter(function (i) { return (i.text || '').trim(); })[0];
+      src = first ? first.text : '';
+    } else if (n.type === 'mindmap') {
+      var c = window.Mindmap && Mindmap.centralNode(n.map);
+      src = c && c.text ? c.text : '';
+    } else {
+      src = n.body || '';
+    }
+    src = String(src).replace(/\s+/g, ' ').trim();
+    if (!src) return '';
+
+    // stop at the first sentence end, so a title is never half a paragraph
+    var stop = src.search(/[.!?](\s|$)/);
+    if (stop > 0 && stop < 60) src = src.slice(0, stop);
+
+    var words = src.split(' ');
+    while (words.length > 1 && TITLE_SKIP[words[0].toLowerCase().replace(/[^a-z]/g, '')]) {
+      words.shift();
+    }
+    var out = words.slice(0, 8).join(' ');
+    if (out.length > 52) out = out.slice(0, 52).replace(/\s\S*$/, '') + '…';
+    else if (words.length > 8) out += '…';
+    return out;
+  }
+
   function displayTitle(n) {
     if (n.title) return n.title;
-    if (n.type === 'mindmap' && window.Mindmap) {
-      var c = Mindmap.centralNode(n.map);
-      if (c && c.text) return c.text;
-    }
+    var auto = autoTitle(n);
+    if (auto) return auto;
     return 'Untitled';
   }
 
@@ -1046,6 +1131,26 @@
      carry only a data-img id; the blob URL is attached at render time and
      stripped again on save, so nothing stale is ever written to the database. */
 
+  /* Folder colours. Deliberately a short list -- these are meant to be told
+     apart instantly out of the corner of your eye, and a long palette stops
+     being readable at a glance. `null` is the default, no colour at all. */
+  var FOLDER_COLORS = [
+    { id: null,      label: 'None' },
+    { id: 'red',     label: 'Red' },
+    { id: 'orange',  label: 'Orange' },
+    { id: 'yellow',  label: 'Yellow' },
+    { id: 'green',   label: 'Green' },
+    { id: 'blue',    label: 'Blue' },
+    { id: 'purple',  label: 'Purple' },
+    { id: 'pink',    label: 'Pink' },
+    { id: 'grey',    label: 'Grey' }
+  ];
+
+  function folderColor(id) {
+    var f = id ? folderById(id) : null;
+    return (f && f.color) || null;
+  }
+
   var ALIGN_CLASS = { left: 'ni-left', right: 'ni-right', center: 'ni-center', full: 'ni-full' };
 
   /* Web addresses become clickable. Done on the stored HTML rather than while
@@ -1100,6 +1205,11 @@
         var keep =
           (node.tagName === 'A' && n === 'href') ||
           (node.tagName === 'IMG' && (n === 'data-img' || n === 'class')) ||
+          // where a freely placed picture sits. Numbers only, and the position
+          // is re-applied as a transform at render time -- nothing from a
+          // pasted document is ever written into a style attribute.
+          (node.tagName === 'IMG' && (n === 'data-fx' || n === 'data-fy') &&
+            /^-?\d{1,5}$/.test(attr.value)) ||
           (node.tagName === 'IMG' && n === 'style' &&
             /^width:\s*[\d.]+%;?$/.test(attr.value));
         if (!keep) node.removeAttribute(attr.name);   // takes every on* handler with it
@@ -1162,7 +1272,7 @@
 
   function renderRichSrcs() {
     Array.prototype.forEach.call($('noteRich').querySelectorAll('img[data-img]'), function (im) {
-      im.draggable = true;
+      im.draggable = false;
       if (!im.getAttribute('src')) imgURL(im.dataset.img).then(function (u) { if (u) im.src = u; });
     });
   }
@@ -1171,8 +1281,11 @@
     var box = $('noteRich');
     box.innerHTML = linkifyHtml(sanitizeHtml(bodyHtmlOf(S.note)));
     Array.prototype.forEach.call(box.querySelectorAll('img[data-img]'), function (im) {
-      im.draggable = true;
+      im.draggable = false;          // the pointer handler owns this gesture
       imgURL(im.dataset.img).then(function (u) { if (u) im.src = u; });
+      if (im.classList.contains('ni-free')) {
+        setFreeXY(im, parseFloat(im.dataset.fx) || 0, parseFloat(im.dataset.fy) || 0);
+      }
     });
     hideImgBar();
   }
@@ -1198,10 +1311,253 @@
 
   var selectedImg = null;
 
+
+/* ================= moving an image in a note =================
+
+   The old version used HTML5 drag-and-drop, which is why it stuck: the
+   browser owns the timing, the real element never moves, and it does nothing
+   at all on touch.
+
+   This is the model CJBoard uses -- remember where the grab started, add the
+   delta, paint. The difference from a canvas is that the picture sits in
+   text, so two things run at once while you drag:
+
+     1. the image follows the pointer through `transform`, which the compositor
+        handles without any layout work, so it tracks 1:1;
+     2. an anchor walks through the text, throttled to one update per frame,
+        and the paragraphs rewrap around wherever it now sits.
+
+   That second part is what makes it feel like PageMaker rather than like
+   dropping a file into a text box. */
+
+var imgDrag = null;
+
+function noteSurface() { return $('noteRich'); }
+
+function freeXY(img) {
+  return {
+    x: parseFloat(img.dataset.fx || '0') || 0,
+    y: parseFloat(img.dataset.fy || '0') || 0
+  };
+}
+
+function setFreeXY(img, x, y) {
+  img.dataset.fx = Math.round(x);
+  img.dataset.fy = Math.round(y);
+  img.style.transform = 'translate3d(' + Math.round(x) + 'px,' + Math.round(y) + 'px,0)';
+}
+
+function isFree(img) { return img.classList.contains('ni-free'); }
+
+function caretFromPoint(x, y) {
+  if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+  if (document.caretPositionFromPoint) {
+    var pos = document.caretPositionFromPoint(x, y);
+    if (!pos) return null;
+    var r = document.createRange();
+    r.setStart(pos.offsetNode, pos.offset);
+    r.collapse(true);
+    return r;
+  }
+  return null;
+}
+
+/* Which side the text should wrap on, from where the pointer is across the
+   writing column. Matches what a person expects: put the picture on the left
+   and the words run down its right. */
+function wrapSideFor(clientX) {
+  var box = noteSurface().getBoundingClientRect();
+  var t = (clientX - box.left) / Math.max(1, box.width);
+  if (t < 0.34) return 'left';
+  if (t > 0.66) return 'right';
+  return 'center';
+}
+
+function applyAlignClass(img, align) {
+  Object.keys(ALIGN_CLASS).forEach(function (k) { img.classList.remove(ALIGN_CLASS[k]); });
+  img.classList.add(ALIGN_CLASS[align] || ALIGN_CLASS.center);
+}
+
+function startImgDrag(e, img) {
+  var r = img.getBoundingClientRect();
+  var free = isFree(img);
+  var xy = free ? freeXY(img) : { x: 0, y: 0 };
+
+  imgDrag = {
+    img: img,
+    free: free,
+    grabX: e.clientX - r.left,        // where inside the picture you took hold
+    grabY: e.clientY - r.top,
+    baseX: xy.x, baseY: xy.y,
+    startClientX: e.clientX, startClientY: e.clientY,
+    lastX: e.clientX, lastY: e.clientY,
+    side: null,
+    frame: 0,
+    moved: false,
+    w: r.width, h: r.height
+  };
+  // capture keeps the gesture if the pointer leaves the picture; not fatal
+  try { img.setPointerCapture(e.pointerId); } catch (err) { /* no active pointer */ }
+}
+
+function imgDragMove(e) {
+  var d = imgDrag;
+  if (!d) return;
+  d.lastX = e.clientX; d.lastY = e.clientY;
+
+  if (!d.moved) {
+    // a few pixels of slack, so a click to select is never a drag
+    if (Math.abs(e.clientX - d.startClientX) < 4 &&
+        Math.abs(e.clientY - d.startClientY) < 4) return;
+    d.moved = true;
+    beginBurst('Move image');
+    d.img.classList.add('ni-drag');
+    document.body.classList.add('img-dragging');
+    if ($('imgGrip')) $('imgGrip').hidden = true;
+  }
+
+  /* Painted straight from the event, the way CJBoard paints from mousemove.
+     Pointer moves already arrive at roughly one per frame, and this writes a
+     transform and nothing else -- no layout. Deferring to requestAnimationFrame
+     would be tidier, but it is throttled in a background view and paused in a
+     hidden one, which would leave the picture stuck exactly when you are
+     dragging it. */
+  paintImgDrag();
+}
+
+function paintImgDrag() {
+  var d = imgDrag, img = d.img;
+  var surface = noteSurface();
+  var box = surface.getBoundingClientRect();
+
+  if (d.free) {
+    // straight coordinates, exactly like a board
+    setFreeXY(img,
+      d.baseX + (d.lastX - d.startClientX),
+      d.baseY + (d.lastY - d.startClientY));
+    return;
+  }
+
+  /* Anchored: the picture follows the pointer for the eye, while the anchor
+     moves through the text so the paragraphs reflow around its new home. */
+  var here = img.getBoundingClientRect();
+  var wantX = d.lastX - d.grabX, wantY = d.lastY - d.grabY;
+  img.style.transform =
+    'translate3d(' + (wantX - here.left + (parseFloat(img.dataset.tx || 0))) + 'px,' +
+    (wantY - here.top + (parseFloat(img.dataset.ty || 0))) + 'px,0)';
+  img.dataset.tx = wantX - here.left + (parseFloat(img.dataset.tx || 0));
+  img.dataset.ty = wantY - here.top + (parseFloat(img.dataset.ty || 0));
+
+  var side = wrapSideFor(d.lastX);
+  var r = caretFromPoint(d.lastX, d.lastY);
+  if (r && !img.contains(r.startContainer) && r.startContainer !== img) {
+    var moved = false;
+    try {
+      // only touch the DOM when the anchor really changed, or every frame
+      // would reflow the note for nothing
+      var probe = document.createRange();
+      probe.selectNode(img);
+      if (r.compareBoundaryPoints(Range.START_TO_START, probe) !== 0) {
+        r.insertNode(img);
+        moved = true;
+      }
+    } catch (err) { /* the caret landed somewhere we cannot use */ }
+    if (moved || side !== d.side) {
+      d.side = side;
+      applyAlignClass(img, side);
+      // re-measure: the reflow moved the picture, so the offset must follow
+      var after = img.getBoundingClientRect();
+      img.dataset.tx = (d.lastX - d.grabX) - (after.left - (parseFloat(img.dataset.tx || 0)));
+      img.dataset.ty = (d.lastY - d.grabY) - (after.top - (parseFloat(img.dataset.ty || 0)));
+      img.style.transform = 'translate3d(' + Math.round(img.dataset.tx) + 'px,' +
+                            Math.round(img.dataset.ty) + 'px,0)';
+    }
+  }
+}
+
+function endImgDrag() {
+  var d = imgDrag;
+  imgDrag = null;
+  if (!d) return;
+  if (d.frame) cancelAnimationFrame(d.frame);
+  document.body.classList.remove('img-dragging');
+  d.img.classList.remove('ni-drag');
+
+  if (!d.moved) { showImgBar(d.img); return; }
+
+  if (d.free) {
+    setFreeXY(d.img, freeXY(d.img).x, freeXY(d.img).y);
+  } else {
+    // settle into the flow: the anchor is already right, so drop the offset
+    d.img.style.transform = '';
+    delete d.img.dataset.tx;
+    delete d.img.dataset.ty;
+  }
+  showImgBar(d.img);
+  saveRich('Move image');
+}
+
+function bindImgDrag() {
+  var rich = $('noteRich');
+
+  rich.addEventListener('pointerdown', function (e) {
+    var img = e.target && e.target.closest ? e.target.closest('img.ni') : null;
+    if (!img || e.button !== 0) return;
+    e.preventDefault();          // no native drag, no text selection
+    showImgBar(img);
+    startImgDrag(e, img);
+  });
+
+  rich.addEventListener('pointermove', function (e) {
+    if (imgDrag) { e.preventDefault(); imgDragMove(e); }
+  });
+
+  rich.addEventListener('pointerup', endImgDrag);
+  rich.addEventListener('pointercancel', endImgDrag);
+
+  // the browser's own drag would still fire on an image; refuse it outright
+  rich.addEventListener('dragstart', function (e) {
+    if (e.target && e.target.closest && e.target.closest('img.ni')) e.preventDefault();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && imgDrag) {
+      var d = imgDrag;
+      imgDrag = null;
+      d.img.classList.remove('ni-drag');
+      document.body.classList.remove('img-dragging');
+      d.img.style.transform = d.free
+        ? 'translate3d(' + d.baseX + 'px,' + d.baseY + 'px,0)' : '';
+      renderRich();
+    }
+  });
+}
+
+/* Free placement is InDesign's "text wrap off": the picture leaves the flow
+   and the words carry on underneath it. */
+function toggleImgFree() {
+  if (!selectedImg) return;
+  var img = selectedImg;
+  var surface = noteSurface();
+  if (isFree(img)) {
+    img.classList.remove('ni-free');
+    img.style.transform = '';
+    delete img.dataset.fx; delete img.dataset.fy;
+    applyAlignClass(img, 'center');
+  } else {
+    var r = img.getBoundingClientRect(), box = surface.getBoundingClientRect();
+    img.classList.add('ni-free');
+    setFreeXY(img, r.left - box.left, r.top - box.top + surface.scrollTop);
+  }
+  showImgBar(img);
+  saveRich('Image placement');
+}
+
   function hideImgBar() {
     if (selectedImg) selectedImg.classList.remove('ni-sel');
     selectedImg = null;
     $('imgBar').hidden = true;
+    if ($('imgGrip')) $('imgGrip').hidden = true;
   }
 
   function showImgBar(img) {
@@ -1215,6 +1571,19 @@
     bar.style.left = Math.max(8, Math.min(r.left - host.left, host.width - 250)) + 'px';
     bar.style.top = Math.max(4, r.top - host.top - 42) + 'px';
     $('imgSize').textContent = Math.round(parseFloat(img.style.width) || 100) + '%';
+    var freeBtn = $('imgFreeBtn');
+    if (freeBtn) freeBtn.classList.toggle('on', isFree(img));
+    placeImgGrip(img);
+  }
+
+  function placeImgGrip(img) {
+    var grip = $('imgGrip');
+    if (!grip) return;
+    var r = img.getBoundingClientRect();
+    var host = $('editorScroll').getBoundingClientRect();
+    grip.hidden = false;
+    grip.style.left = (r.right - host.left - 8) + 'px';
+    grip.style.top = (r.bottom - host.top - 8 + $('editorScroll').scrollTop) + 'px';
   }
 
   function setImgAlign(align) {
@@ -1224,6 +1593,47 @@
     if (align === 'full') selectedImg.style.width = '100%';
     showImgBar(selectedImg);
     saveRich('Image layout');
+  }
+
+  /* Dragging the corner sets the width as a percentage of the writing column,
+     so the picture keeps its place when the window or the interface size
+     changes. Height stays auto, so the proportions look after themselves. */
+  function bindImgResize() {
+    var grip = $('imgGrip');
+    if (!grip) return;
+    var startX = 0, startW = 0, hostW = 1, live = false;
+
+    grip.addEventListener('pointerdown', function (e) {
+      if (!selectedImg) return;
+      live = true;
+      startX = e.clientX;
+      startW = selectedImg.getBoundingClientRect().width;
+      hostW = $('noteRich').clientWidth || 1;
+      grip.classList.add('on');
+      document.body.classList.add('img-resizing');
+      try { grip.setPointerCapture(e.pointerId); } catch (err) { /* no active pointer */ }
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    grip.addEventListener('pointermove', function (e) {
+      if (!live || !selectedImg) return;
+      var w = startW + (e.clientX - startX);
+      var pct = Math.max(10, Math.min(100, Math.round(w / hostW * 100)));
+      selectedImg.style.width = pct + '%';
+      $('imgSize').textContent = pct + '%';
+      placeImgGrip(selectedImg);
+    });
+
+    function stop() {
+      if (!live) return;
+      live = false;
+      grip.classList.remove('on');
+      document.body.classList.remove('img-resizing');
+      if (selectedImg) { showImgBar(selectedImg); saveRich('Resize image'); }
+    }
+    grip.addEventListener('pointerup', stop);
+    grip.addEventListener('pointercancel', stop);
   }
 
   function nudgeImgSize(delta) {
@@ -1245,6 +1655,71 @@
       S.note.images = S.note.images.filter(function (x) { return x !== id; });
       touch();
     }
+  }
+
+  /* Capitalise the letter that starts a sentence.
+
+     Deliberately conservative. It only fires on a letter typed directly after
+     a sentence ending plus a space, or at the very start, so it cannot reach
+     back and rewrite text you already have. Common abbreviations are left
+     alone, because "e.g. this" must not become "e.g. This". The change goes in
+     through the normal edit path, so Ctrl+Z undoes it like anything else. */
+  var ABBREV = /(^|\s)(e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|st|no|fig|approx|cf|al)\.$/i;
+
+  function capitaliseSentence(el) {
+    if (!S.autoCaps) return false;
+    var sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    var r = sel.getRangeAt(0);
+    if (!r.collapsed) return false;
+    var node = r.startContainer;
+    if (node.nodeType !== 3) return false;          // text nodes only
+    var at = r.startOffset;
+    if (at < 1) return false;
+
+    var ch = node.data.charAt(at - 1);
+    if (!/[a-z]/.test(ch)) return false;            // only a lowercase letter
+    var before = node.data.slice(0, at - 1);
+
+    // start of the note, or a sentence ending followed by a space
+    var atStart = !before.trim() && !hasTextBefore(el, node);
+    var afterStop = /[.!?]["'’”)\]]*\s+$/.test(before);
+    if (!atStart && !afterStop) return false;
+    if (afterStop && ABBREV.test(before.replace(/\s+$/, ''))) return false;
+
+    node.replaceData(at - 1, 1, ch.toUpperCase());
+    // put the caret back where the typist left it
+    r.setStart(node, at); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+    return true;
+  }
+
+  // is there any text in the editor before this node?
+  function hasTextBefore(root, node) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var t;
+    while ((t = walker.nextNode())) {
+      if (t === node) return false;
+      if (t.data.trim()) return true;
+    }
+    return false;
+  }
+
+  /* The textarea version: same rule, applied to a plain value + caret pair. */
+  function capitaliseField(ta) {
+    if (!S.autoCaps) return false;
+    var at = ta.selectionStart;
+    if (at !== ta.selectionEnd || at < 1) return false;
+    var ch = ta.value.charAt(at - 1);
+    if (!/[a-z]/.test(ch)) return false;
+    var before = ta.value.slice(0, at - 1);
+    var atStart = !before.trim();
+    var afterStop = /[.!?]["'’”)\]]*\s+$/.test(before);
+    if (!atStart && !afterStop) return false;
+    if (afterStop && ABBREV.test(before.replace(/\s+$/, ''))) return false;
+    ta.value = before + ch.toUpperCase() + ta.value.slice(at);
+    ta.selectionStart = ta.selectionEnd = at;
+    return true;
   }
 
   function saveRich(label) {
@@ -1380,6 +1855,29 @@
     var items = (S.note && S.note.items) || [];
     for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
     return -1;
+  }
+
+  /* Sub-items are expressed by indent alone, so an item's children are the
+     following items indented deeper, up to the next item at its own level or
+     shallower. A parent is crossed out exactly when it has children and every
+     one of them is crossed out -- so unticking a child brings the parent back
+     on its own. Childless items keep working by hand. */
+  function childRange(items, i) {
+    var depth = items[i].indent || 0, j = i + 1;
+    while (j < items.length && (items[j].indent || 0) > depth) j++;
+    return j;                                  // exclusive end
+  }
+
+  function syncParents() {
+    var items = S.note && S.note.items;
+    if (!items) return;
+    // deepest first, so a parent sees children that are already settled
+    for (var i = items.length - 1; i >= 0; i--) {
+      var end = childRange(items, i);
+      if (end === i + 1) continue;             // no children: leave it alone
+      var kids = items.slice(i + 1, end);
+      items[i].done = kids.every(function (k) { return k.done; });
+    }
   }
 
   function addItem(afterId, indent, atTop) {
@@ -1970,6 +2468,8 @@
           '<button class="seg-btn on" data-bg="light">Light</button>' +
           '<button class="seg-btn" data-bg="dark">Dark</button></div>'
         : '') +
+      '<label class="check"><input type="checkbox" id="xmeta"' +
+      (S.exportDates ? ' checked' : '') + '> Include the folder and date line</label>' +
       '<div class="opt-grid">' + formats.map(function (f) {
         return '<button class="opt" data-fmt="' + f[0] + '"><b>' + esc(f[1]) + '</b><span>' +
           esc(f[2]) + '</span></button>';
@@ -1977,6 +2477,13 @@
       '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button></div>',
       function (root) {
         root.querySelector('[data-x="c"]').onclick = closeDlg;
+        var xmeta = root.querySelector('#xmeta');
+        if (xmeta) {
+          xmeta.onchange = function () {
+            S.exportDates = xmeta.checked;
+            applyFont();                    // persists the display preferences
+          };
+        }
         var mapDark = false;
         var seg = root.querySelector('#bgSeg');
         if (seg) {
@@ -2000,7 +2507,7 @@
                 if (n.folderId) names[n.id] = folderPath(n.folderId);
               });
               return Exporter.exportNotes(notes, fmt, {
-                name: baseName, folderName: names,
+                name: baseName, folderName: S.exportDates ? names : null,
                 docTitle: notes.length === 1 ? displayTitle(notes[0]) : 'Sulat export',
                 dates: S.exportDates,
                 mapDark: mapDark,
@@ -2091,9 +2598,29 @@
       '<button class="opt" data-x="sub"><b>New subfolder</b><span>Nest one inside</span></button>' +
       '<button class="opt" data-x="export"><b>Export folder</b><span>All notes inside, any format</span></button>' +
       '<button class="opt" data-x="del"><b>Delete folder</b><span>Notes move to Unfiled</span></button>' +
-      '</div><div class="dlg-actions"><button class="btn" data-x="c">Close</button></div>',
+      '</div>' +
+      '<label class="fld">Colour</label>' +
+      '<div class="fcolors">' + FOLDER_COLORS.map(function (c) {
+        return '<button class="fswatch' + ((f.color || null) === c.id ? ' on' : '') +
+          '" data-fc="' + (c.id || '') + '" title="' + esc(c.label) + '"' +
+          (c.id ? ' data-fcolor="' + c.id + '"' : '') + '></button>';
+      }).join('') + '</div>' +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Close</button></div>',
       function (root) {
         root.querySelector('[data-x="c"]').onclick = closeDlg;
+        Array.prototype.forEach.call(root.querySelectorAll('[data-fc]'), function (b) {
+          b.onclick = function () {
+            var val = b.dataset.fc || null;
+            act('Folder colour', [{ store: 'folders', id: id }], function () {
+              if (val) f.color = val; else delete f.color;
+            }).then(function () {
+              Array.prototype.forEach.call(root.querySelectorAll('[data-fc]'), function (x) {
+                x.classList.toggle('on', x === b);
+              });
+              renderTree(); renderList(); renderUndoButtons();
+            });
+          };
+        });
         root.querySelector('[data-x="rename"]').onclick = function () {
           closeDlg();
           promptDialog('Rename folder', f.name, function (v) {
@@ -2184,8 +2711,11 @@
       }).join('') + '</select>' +
       '<div class="font-preview" id="dp"></div>' +
 
+      '<label class="check"><input type="checkbox" id="ac"' + (S.autoCaps ? ' checked' : '') +
+      '> Capitalise the start of a sentence</label>' +
+
       '<label class="check"><input type="checkbox" id="xd"' + (S.exportDates ? ' checked' : '') +
-      '> Include dates in exports</label>' +
+      '> Folder and date line in exports</label>' +
 
       '<div class="dlg-actions">' +
       '<button class="btn" data-x="reset">Reset</button>' +
@@ -2195,12 +2725,14 @@
         var fsv = root.querySelector('#fsv'), fp = root.querySelector('#fp');
         var dfmt = root.querySelector('#dfmt'), dp = root.querySelector('#dp');
         var xd = root.querySelector('#xd');
+        var ac = root.querySelector('#ac');
         var us = root.querySelector('#us'), usv = root.querySelector('#usv');
         var uf = root.querySelector('#uf');
         function live() {
           S.font = { family: ff.value, size: parseInt(fs.value, 10) };
           S.dateFormat = dfmt.value;
           S.exportDates = xd.checked;
+          S.autoCaps = ac.checked;
           S.uiScale = parseInt(us.value, 10);
           S.uiFont = uf.value;
           usv.textContent = S.uiScale;
@@ -2219,13 +2751,15 @@
         fs.oninput = live;
         dfmt.onchange = live;
         xd.onchange = live;
+        ac.onchange = live;
         us.oninput = live;
         uf.onchange = live;
         root.querySelector('[data-x="reset"]').onclick = function () {
           ff.value = 'system';
           fs.value = SIZE_DEFAULT;
           dfmt.value = 'relative';
-          xd.checked = true;
+          xd.checked = false;
+          ac.checked = true;
           us.value = 100;
           uf.value = 'system';
           live();
@@ -2403,6 +2937,174 @@
     });
   }
 
+  /* Encryption is offered, not imposed. A backup you cannot open is worse
+     than no backup, and forgetting this password costs only this one file --
+     your notes are still on the device in the clear. */
+  function backupDialog() {
+    var linked = Exporter.linkedName();
+    showDlg(
+      '<h3>Export backup</h3>' +
+      '<p class="sub">One file with every note, folder, list, mindmap and image.' +
+      (linked ? ' It will overwrite <b>' + esc(linked) + '</b>.' : '') + '</p>' +
+      '<label class="check"><input type="checkbox" id="be"> Protect it with a password</label>' +
+      '<div id="beWrap" hidden>' +
+      '<label class="fld" for="bp">Password</label>' +
+      '<input type="password" id="bp" autocomplete="new-password">' +
+      '<label class="fld" for="bp2">Repeat it</label>' +
+      '<input type="password" id="bp2" autocomplete="new-password">' +
+      '<p class="sub tight">Needed to import this file anywhere. Forgetting it ' +
+      'costs you this file only — your notes stay on this device, so you can ' +
+      'always export a fresh one.</p></div>' +
+      '<div class="dlg-err" id="berr" hidden></div>' +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button>' +
+      '<button class="btn solid" data-x="k">Export</button></div>',
+      function (root) {
+        var be = root.querySelector('#be'), wrap = root.querySelector('#beWrap');
+        var bp = root.querySelector('#bp'), bp2 = root.querySelector('#bp2');
+        var err = root.querySelector('#berr');
+        be.onchange = function () {
+          wrap.hidden = !be.checked;
+          if (be.checked) bp.focus();
+        };
+        if (!Lock.available()) {
+          be.disabled = true;
+          be.parentNode.title = 'Encryption needs a secure connection (https or localhost).';
+        }
+        root.querySelector('[data-x="c"]').onclick = closeDlg;
+        root.querySelector('[data-x="k"]').onclick = function () {
+          var pass = be.checked ? bp.value : '';
+          if (be.checked) {
+            if (pass.length < 4) { err.textContent = 'Use at least 4 characters.'; err.hidden = false; return; }
+            if (pass !== bp2.value) { err.textContent = 'Those two do not match.'; err.hidden = false; return; }
+          }
+          closeDlg();
+          Exporter.exportBundle(null, null, { password: pass, toLinked: true })
+            .then(function (c) {
+              var size = c.bytes ? ' · ' + (c.bytes / 1048576).toFixed(1) + ' MB' : '';
+              toast('Backed up ' + plural(c.notes, 'note') + ' and ' +
+                    plural(c.images, 'image') + (c.encrypted ? ', encrypted' : '') + size);
+            })
+            .catch(function (e) { toast('Backup failed: ' + e.message); });
+        };
+      }
+    );
+  }
+
+  /* An encrypted backup asks for its password rather than failing. The prompt
+     only appears once the file has said it is encrypted, so a plain import is
+     never interrupted by one. */
+  function runImport(file, password) {
+    Exporter.importBundle(file, { password: password }).then(function (c) {
+      return load().then(function () {
+        History.clear();
+        S.note = null;
+        renderTree(); renderList(); showEmpty(); renderStorage();
+        var bits = [];
+        if (c.added) bits.push(c.added + ' new');
+        if (c.updated) bits.push(c.updated + ' updated');
+        if (c.kept) bits.push(c.kept + ' already newer here');
+        toast(bits.length ? 'Merged: ' + bits.join(', ') : 'Nothing to merge — already up to date');
+      });
+    }).catch(function (e) {
+      if (e && (e.needsPassword || /wrong password/i.test(e.message))) {
+        askImportPassword(file, !!password);
+        return;
+      }
+      toast('Import failed: ' + e.message);
+    });
+  }
+
+  function askImportPassword(file, retry) {
+    showDlg(
+      '<h3>This backup is locked</h3>' +
+      '<p class="sub">Enter the password it was exported with.</p>' +
+      '<label class="fld" for="ip">Password</label>' +
+      '<input type="password" id="ip" autocomplete="current-password">' +
+      (retry ? '<div class="dlg-err">That password did not open it.</div>' : '') +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button>' +
+      '<button class="btn solid" data-x="k">Import</button></div>',
+      function (root) {
+        var ip = root.querySelector('#ip');
+        root.querySelector('[data-x="c"]').onclick = closeDlg;
+        root.querySelector('[data-x="k"]').onclick = function () {
+          var v = ip.value;
+          closeDlg();
+          runImport(file, v);
+        };
+        ip.onkeydown = function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); root.querySelector('[data-x="k"]').click(); }
+        };
+        setTimeout(function () { ip.focus(); }, 30);
+      }
+    );
+  }
+
+  /* Shown once, immediately after locking. We cannot show it again: the code
+     is not stored anywhere in readable form -- only the note encrypted under
+     it is -- which is exactly what stops it being a back door. */
+  function showRecoveryCode(code) {
+    showDlg(
+      '<h3>Your recovery code</h3>' +
+      '<p class="sub">This opens the note if you forget the password. It is shown ' +
+      '<b>once</b> and cannot be looked up later. Write it down or put it in a ' +
+      'password manager now.</p>' +
+      '<div class="reccode" id="rcVal">' + esc(code) + '</div>' +
+      '<div class="dlg-actions">' +
+      '<button class="btn" data-x="copy">Copy</button>' +
+      '<button class="btn solid" data-x="c">I have saved it</button></div>',
+      function (root) {
+        root.querySelector('[data-x="c"]').onclick = function () {
+          closeDlg();
+          toast('Locked. Undo history was cleared.');
+        };
+        root.querySelector('[data-x="copy"]').onclick = function () {
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(code).then(function () { toast('Copied'); },
+              function () { toast('Could not copy — write it down instead.'); });
+          } else {
+            toast('Could not copy — write it down instead.');
+          }
+        };
+      }
+    );
+  }
+
+  /* ---------- backing up on its own ----------
+     A backup you have to remember is a backup you will not have. This writes
+     one a short while after you stop editing, and at most once an hour, so a
+     long working session costs a single file rather than one per keystroke.
+
+     It writes to the file you linked when there is one, and falls back to a
+     normal download otherwise -- which is noisier, hence off until asked for. */
+  var AUTO_QUIET_MS = 60 * 1000;          // wait for the typing to stop
+  var AUTO_MIN_GAP_MS = 60 * 60 * 1000;   // and never more often than hourly
+  var autoTimer = null;
+
+  function scheduleAutoBackup() {
+    if (!S.autoBackup) return;
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(runAutoBackup, AUTO_QUIET_MS);
+  }
+
+  function runAutoBackup() {
+    if (!S.autoBackup) return;
+    var now = Date.now();
+    if (S.lastAutoBackup && now - S.lastAutoBackup < AUTO_MIN_GAP_MS) {
+      // too soon: come back when the gap has passed
+      autoTimer = setTimeout(runAutoBackup, AUTO_MIN_GAP_MS - (now - S.lastAutoBackup));
+      return;
+    }
+    Exporter.exportBundle(null, null, { toLinked: true, quiet: true })
+      .then(function (c) {
+        S.lastAutoBackup = Date.now();
+        try { localStorage.setItem('sulat-lastautobackup', String(S.lastAutoBackup)); }
+        catch (e) { /* private mode */ }
+        console.info('Sulat: automatic backup', c.notes + ' notes',
+                     Math.round((c.bytes || 0) / 1024) + ' KB');
+      })
+      .catch(function (e) { console.warn('Sulat: automatic backup skipped -', e.message); });
+  }
+
   function transferDialog() {
     DB.estimate().then(function (est) {
       var used = est && est.usage ? (est.usage / 1048576).toFixed(1) + ' MB used' : 'size unknown';
@@ -2415,10 +3117,40 @@
           plural(S.folders.length, 'folder') + ' · ' + esc(used) +
           '.<br>Your notes are inside this browser, not in loose files. The backup below is ' +
           'the one file that holds all of them — export it here, import it on your phone.</p>' +
+          (DB.isFallback()
+            ? '<p class="sub tight"><b>Limited storage.</b> This page was opened ' +
+              'straight from a file, so the browser will not give it the normal ' +
+              'database and Sulat is using a smaller one — about 5 MB, enough for ' +
+              'a lot of writing but only a handful of images. Export a backup often. ' +
+              'Opening the app from a web address instead removes the limit.</p>'
+            : '') +
+          /* Two things people actually come here for, then the automatic
+             backup, then everything else folded away. The old grid put nine
+             equal-looking buttons on screen at once, so the two that matter
+             were no easier to find than "Merge duplicate folders". */
           '<div class="opt-grid">' +
-          '<button class="opt" data-x="out"><b>Export backup</b><span>One .json with notes, folders and images</span></button>' +
-          '<button class="opt" data-x="in"><b>Import backup</b><span>Merges into what is here</span></button>' +
-          '<button class="opt" data-x="all"><b>Export all notes</b><span>PDF, Markdown, text or web page</span></button>' +
+          '<button class="opt" data-x="out"><b>Export backup</b>' +
+          '<span>One file with everything, to keep or move to your phone</span></button>' +
+          '<button class="opt" data-x="in"><b>Import backup</b>' +
+          '<span>Merges into what is here</span></button>' +
+          '</div>' +
+
+          '<div class="auto-box">' +
+          '<label class="check"><input type="checkbox" id="autoBk"' +
+          (S.autoBackup ? ' checked' : '') + '> Back up automatically</label>' +
+          '<p class="sub tight" id="autoLine"></p>' +
+          (Exporter.hasFilePicker()
+            ? '<button class="ghost-btn" data-x="link">' +
+              (Exporter.linkedName() ? 'Use Downloads instead' : 'Choose a file to keep updated') +
+              '</button>'
+            : '<p class="sub tight">This browser cannot write to a file you choose, ' +
+              'so automatic backups land in your Downloads folder.</p>') +
+          '</div>' +
+
+          '<details class="more-box"><summary>Other tools</summary>' +
+          '<div class="opt-grid">' +
+          '<button class="opt" data-x="all"><b>Export all notes</b>' +
+          '<span>PDF, Markdown, text or web page</span></button>' +
           '<button class="opt" data-x="snaps"><b>Daily snapshots</b>' +
           '<span id="snapLine">kept automatically on this device</span></button>' +
           '<button class="opt" data-x="dupfolders"><b>Merge duplicate folders</b>' +
@@ -2426,20 +3158,61 @@
           '<button class="opt" data-x="dupnotes"><b>Find duplicate notes</b>' +
           '<span>For when the same note landed twice</span></button>' +
           '<button class="opt" data-x="refresh"><b>Reload the app files</b>' +
-          '<span>If the app looks out of date after an update</span></button>' +
+          '<span id="buildLine">If the app looks out of date after an update</span></button>' +
           '<button class="opt" data-x="persist"><b>' +
           (isP ? 'Storage is persistent' : 'Make storage persistent') + '</b><span>' +
           (isP ? 'The browser will not evict your notes' : 'Ask the browser not to evict your notes') +
           '</span></button>' +
-          '</div><div class="dlg-actions"><button class="btn" data-x="c">Close</button></div>',
+          '</div></details>' +
+          '<div class="dlg-actions"><button class="btn" data-x="c">Close</button></div>',
           function (root) {
             root.querySelector('[data-x="c"]').onclick = closeDlg;
+
+            var autoBox = root.querySelector('#autoBk');
+            var autoLine = root.querySelector('#autoLine');
+            function describeAuto() {
+              if (!autoLine) return;
+              var where = Exporter.linkedName();
+              autoLine.textContent = !S.autoBackup
+                ? 'Off. Nothing is written unless you export by hand.'
+                : (where
+                    ? 'Overwrites ' + where + ' about a minute after you stop editing.'
+                    : 'Saves to your Downloads folder about a minute after you stop editing.') +
+                  (S.lastAutoBackup ? ' Last: ' + fmtDate(S.lastAutoBackup, { time: true }) + '.' : '');
+            }
+            describeAuto();
+            if (autoBox) {
+              autoBox.onchange = function () {
+                S.autoBackup = autoBox.checked;
+                try { localStorage.setItem('sulat-autobackup', S.autoBackup ? '1' : '0'); }
+                catch (err) { /* private mode */ }
+                describeAuto();
+                if (S.autoBackup) scheduleAutoBackup();
+              };
+            }
+
             root.querySelector('[data-x="out"]').onclick = function () {
               closeDlg();
-              Exporter.exportBundle(null, null).then(function (c) {
-                toast('Backed up ' + plural(c.notes, 'note') + ' and ' + plural(c.images, 'image'));
-              }).catch(function (e) { toast('Backup failed: ' + e.message); });
+              backupDialog();
             };
+            var linkBtn = root.querySelector('[data-x="link"]');
+            if (linkBtn) {
+              linkBtn.onclick = function () {
+                if (Exporter.linkedName()) {
+                  Exporter.unlinkBackupFile();
+                  closeDlg();
+                  toast('Backups go to your Downloads folder again.');
+                  return;
+                }
+                Exporter.linkBackupFile().then(function (name) {
+                  closeDlg();
+                  toast('Backups now keep ' + name + ' up to date');
+                }).catch(function (e) {
+                  if (e && e.name === 'AbortError') return;      // they changed their mind
+                  toast('Could not link a file: ' + e.message);
+                });
+              };
+            }
             root.querySelector('[data-x="in"]').onclick = function () {
               closeDlg();
               $('bundlePick').click();
@@ -2501,6 +3274,21 @@
                If that cache ever gets stuck on an old build, this clears it and
                reloads. It only touches the cached copies of the app's own files --
                the notes live in IndexedDB and are not involved. */
+            /* Which build is in front of you. The service worker's cache name is
+               the build hash the packager stamped in, so it answers the question
+               exactly -- and answers it differently from what the page *thinks*
+               it is, which is the whole point when an update has not landed. */
+            (function () {
+              var line = root.querySelector('#buildLine');
+              if (!line || !window.caches) return;
+              caches.keys().then(function (keys) {
+                var mine = keys.filter(function (k) { return k.indexOf('sulat-') === 0; });
+                line.textContent = mine.length
+                  ? 'Running build ' + mine[0].replace('sulat-', '')
+                  : 'Running from the server, with no offline copy stored';
+              }).catch(function () { /* leave the default wording */ });
+            })();
+
             root.querySelector('[data-x="refresh"]').onclick = function () {
               confirmDialog('Reload the app files?',
                 'This clears the offline copy of the app and fetches it again. ' +
@@ -2726,10 +3514,14 @@
       showDlg(
         '<h3>Lock “' + esc(n.title || 'Untitled') + '”</h3>' +
         '<p class="sub">The text, list, mindmap and any images are encrypted with this ' +
-        'passphrase and removed from the database — including from backup files. ' +
-        '<b>There is no recovery: if you forget it, the note is gone.</b> The title stays ' +
-        'visible so you can still find the note.</p>' +
-        '<label class="fld" for="p1">Passphrase</label>' +
+        'password and removed from the database — including from backup files. ' +
+        'The title stays visible so you can still find the note.</p>' +
+        '<label class="check"><input type="checkbox" id="rc" checked> ' +
+        'Also give me a recovery code</label>' +
+        '<p class="sub tight" id="rcNote">A second key to this note, shown once after ' +
+        'locking. Keep it somewhere safe. Without it there is no way back if you ' +
+        'forget the password.</p>' +
+        '<label class="fld" for="p1">Password</label>' +
         '<input type="password" id="p1" autocomplete="new-password">' +
         '<label class="fld" for="p2">Repeat it</label>' +
         '<input type="password" id="p2" autocomplete="new-password">' +
@@ -2745,15 +3537,18 @@
             if (p1.value.length < 4) return fail('Use at least 4 characters.');
             if (p1.value !== p2.value) return fail('Those two do not match.');
             var pass = p1.value;
+            var wantCode = root.querySelector('#rc').checked;
+            var code = wantCode ? Lock.makeRecoveryCode() : null;
             closeDlg();
             flush().then(function () {
-              return Lock.lock(n, pass);
+              return Lock.lock(n, pass, code);
             }).then(function () {
               History.clear();          // the old plaintext must not sit in undo
               renderUndoButtons();
               openNote(n.id);
               renderList();
-              toast('Locked. Undo history was cleared.');
+              if (code) showRecoveryCode(code);
+              else toast('Locked. Undo history was cleared.');
             }).catch(function (e) { toast('Could not lock: ' + e.message); });
           };
           p2.onkeydown = function (e) {
@@ -2769,8 +3564,9 @@
       if (!n || !n.locked) { toast('That note is not locked.'); return; }
       showDlg(
         '<h3>Unlock “' + esc(n.title || 'Untitled') + '”</h3>' +
-        '<p class="sub">The note is decrypted and stays unlocked until you lock it again.</p>' +
-        '<label class="fld" for="pu">Passphrase</label>' +
+        '<p class="sub">The note is decrypted and stays unlocked until you lock it again. ' +
+        'Your recovery code works here too.</p>' +
+        '<label class="fld" for="pu">Password or recovery code</label>' +
         '<input type="password" id="pu" autocomplete="current-password">' +
         '<div class="dlg-err" id="uerr" hidden></div>' +
         '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button>' +
@@ -2997,6 +3793,7 @@
     'map-zoom-out': function () { S.map.zoomBy(1 / 1.2); },
 
     'img-align': function (e, t) { setImgAlign(t.dataset.align); },
+    'img-free': function () { toggleImgFree(); },
     'img-smaller': function () { nudgeImgSize(-10); },
     'img-bigger': function () { nudgeImgSize(10); },
     'img-remove': function () { removeSelectedImg(); },
@@ -3034,7 +3831,7 @@
     'map-font-smaller': 1, 'map-font-bigger': 1,
     'map-line-thinner': 1, 'map-line-thicker': 1,
     'map-tone-down': 1, 'map-tone-up': 1,
-    'img-smaller': 1, 'img-bigger': 1,
+    'img-smaller': 1, 'img-bigger': 1, 'img-free': 1,
     'map-zoom-in': 1, 'map-zoom-out': 1
   };
 
@@ -3098,6 +3895,122 @@
       if (!isOpen() && dx > THRESHOLD) $('app').dataset.nav = 'open';
       else if (isOpen() && dx < -THRESHOLD) delete $('app').dataset.nav;
     }, { passive: true });
+  }
+
+  /* ---------- dragging the pane edges ----------
+     The three-pane grid is driven by --nav-w and --list-w, so resizing is just
+     writing those two. The widths are only applied once you have actually
+     dragged; until then the view modes keep choosing the list width for you.
+     Double-click a handle to hand that choice back. */
+  var PANE_MIN = { nav: 150, list: 220 }, PANE_MAX = { nav: 460, list: 720 };
+
+  function applyPaneWidths() {
+    var app = $('app');
+    if (S.paneW.nav)  app.style.setProperty('--nav-w', S.paneW.nav + 'px');
+    else app.style.removeProperty('--nav-w');
+    if (S.paneW.list) app.style.setProperty('--list-w', S.paneW.list + 'px');
+    else app.style.removeProperty('--list-w');
+    try { localStorage.setItem('slate-panew', JSON.stringify(S.paneW)); }
+    catch (e) { /* private mode */ }
+  }
+
+  function bindPaneResize() {
+    var dragging = null, startX = 0, startW = 0;
+
+    document.addEventListener('pointerdown', function (e) {
+      var h = e.target.closest && e.target.closest('.resizer');
+      if (!h || window.innerWidth <= 900) return;
+      dragging = h.dataset.resize;
+      startX = e.clientX;
+      var app = $('app');
+      startW = parseFloat(getComputedStyle(app)
+        .getPropertyValue(dragging === 'nav' ? '--nav-w' : '--list-w')) || 0;
+      h.classList.add('on');
+      document.body.classList.add('resizing');
+      h.setPointerCapture && h.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+
+    document.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var w = startW + (e.clientX - startX);
+      S.paneW[dragging] = Math.max(PANE_MIN[dragging], Math.min(PANE_MAX[dragging], Math.round(w)));
+      applyPaneWidths();
+    });
+
+    document.addEventListener('pointerup', function () {
+      if (!dragging) return;
+      dragging = null;
+      document.body.classList.remove('resizing');
+      Array.prototype.forEach.call(document.querySelectorAll('.resizer'), function (r) {
+        r.classList.remove('on');
+      });
+      if (S.map) S.map.resize();
+    });
+
+    document.addEventListener('dblclick', function (e) {
+      var h = e.target.closest && e.target.closest('.resizer');
+      if (!h) return;
+      S.paneW[h.dataset.resize] = 0;      // back to the stylesheet's own width
+      applyPaneWidths();
+      toast('Pane width reset');
+    });
+  }
+
+  /* ---------- rubber-band selection over the note list ----------
+     Mouse only. On a touch screen a drag across the list is a scroll, and
+     taking that over would make the list unusable; phones pick notes with the
+     checkbox on each card. */
+  function bindRubberBand() {
+    var band = $('rubber'), scroll = $('noteList');
+    var active = false, x0 = 0, y0 = 0, additive = false;
+
+    scroll.addEventListener('pointerdown', function (e) {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      // only from empty space, never from a card or a control
+      if (e.target.closest('.card, button, input, select, a, [data-folder-row]')) return;
+      active = true;
+      additive = e.shiftKey || e.ctrlKey || e.metaKey;
+      x0 = e.clientX; y0 = e.clientY;
+      if (!additive) { S.picked = {}; }
+      band.hidden = false;
+      band.style.left = x0 + 'px'; band.style.top = y0 + 'px';
+      band.style.width = '0px';    band.style.height = '0px';
+    });
+
+    document.addEventListener('pointermove', function (e) {
+      if (!active) return;
+      var x = Math.min(x0, e.clientX), y = Math.min(y0, e.clientY);
+      var w = Math.abs(e.clientX - x0), h = Math.abs(e.clientY - y0);
+      band.style.left = x + 'px';  band.style.top = y + 'px';
+      band.style.width = w + 'px'; band.style.height = h + 'px';
+      if (w < 4 && h < 4) return;                  // a click, not yet a drag
+
+      var r = { l: x, t: y, r: x + w, b: y + h };
+      Array.prototype.forEach.call(scroll.querySelectorAll('.card'), function (c) {
+        var q = c.getBoundingClientRect();
+        var hit = q.left < r.r && q.right > r.l && q.top < r.b && q.bottom > r.t;
+        if (hit) S.picked[c.dataset.noteId] = true;
+        else if (!additive) delete S.picked[c.dataset.noteId];
+        c.classList.toggle('picked', !!S.picked[c.dataset.noteId]);
+        var box = c.querySelector('[data-pick-note]');
+        if (box) {
+          box.classList.toggle('on', !!S.picked[c.dataset.noteId]);
+          box.textContent = S.picked[c.dataset.noteId] ? '✓' : '';
+        }
+      });
+    });
+
+    document.addEventListener('pointerup', function () {
+      if (!active) return;
+      active = false;
+      band.hidden = true;
+      if (Object.keys(S.picked).length && !S.selecting) {
+        S.selecting = true;
+        renderSelectBar();
+      }
+      renderSelectBar();
+    });
   }
 
   function closeMenus() {
@@ -3181,7 +4094,15 @@
       var card = t.closest('[data-note-id]');
       if (card) {
         var id = card.dataset.noteId;
-        if (S.selecting) {
+        /* Clicking a card always opens it.
+
+           It used to toggle the tick instead whenever selection mode happened
+           to be on, which left the list looking dead: notes ticked one after
+           another and the editor never changed. Selecting is what the checkbox,
+           a rubber-band drag, and Ctrl or Shift click are for -- all of them
+           deliberate. Nothing can now put the list into a state where clicking
+           a note does not open it. */
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
           if (S.picked[id]) delete S.picked[id]; else S.picked[id] = true;
           // Repaint just this card: a full re-render would throw away the
           // list's scroll position on every tick.
@@ -3189,6 +4110,8 @@
           card.classList.toggle('picked', on);
           var box = card.querySelector('.card-check');
           if (box) { box.classList.toggle('on', on); box.textContent = on ? '✓' : ''; }
+          if (!S.selecting && pickedIds().length) S.selecting = true;
+          if (!pickedIds().length) S.selecting = false;
           renderSelectBar();
         } else {
           openNote(id);
@@ -3220,10 +4143,10 @@
         var label = it.done ? 'Uncheck item' : 'Check item';
         editNote(label, function () {
           it.done = !it.done;
+          syncParents();
           S.note.updatedAt = Date.now();
         }).then(function () {
-          var row = document.querySelector('.row[data-id="' + iid + '"]');
-          if (row) row.classList.toggle('done', it.done);
+          renderItems();          // parents above may have changed too
           updateCount(); renderUndoButtons();
         });
         return;
@@ -3264,9 +4187,14 @@
         if (first) first.focus();
       } else this.blur();
     });
+    $('editorScroll').addEventListener('scroll', function () {
+      if (selectedImg) placeImgGrip(selectedImg);
+    }, { passive: true });
+
     var rich = $('noteRich');
     rich.addEventListener('input', function () {
       if (!S.note) return;
+      capitaliseSentence(rich);
       saveRich('Edit text');
     });
     rich.addEventListener('blur', function () {
@@ -3281,6 +4209,9 @@
         if (S.note && S.note.type === 'text') { renderRich(); renderGallery(); }
       }, 0);
     });
+
+
+
 
     rich.addEventListener('click', function (e) {
       var a = e.target.closest('a[href]');
@@ -3313,6 +4244,7 @@
       var ta = e.target.closest('[data-item]');
       if (!ta || !S.note) return;
       beginBurst('Edit item');
+      capitaliseField(ta);
       var it = S.note.items[itemIndex(ta.dataset.item)];
       it.text = ta.value;
       autosizeItem(ta);
@@ -3407,18 +4339,7 @@
       var f = this.files[0];
       this.value = '';
       if (!f) return;
-      Exporter.importBundle(f).then(function (c) {
-        return load().then(function () {
-          History.clear();
-          S.note = null;
-          renderTree(); renderList(); showEmpty(); renderStorage();
-          var bits = [];
-          if (c.added) bits.push(c.added + ' new');
-          if (c.updated) bits.push(c.updated + ' updated');
-          if (c.kept) bits.push(c.kept + ' already newer here');
-          toast(bits.length ? 'Merged: ' + bits.join(', ') : 'Nothing to merge — already up to date');
-        });
-      }).catch(function (e) { toast('Import failed: ' + e.message); });
+      runImport(f, '');
     });
 
     document.addEventListener('paste', function (e) {
@@ -3570,6 +4491,20 @@
       if (e.key === 'n' && !mod) { e.preventDefault(); newNote('text'); }
     });
 
+    var sortSel = $('sortBy');
+    if (sortSel) {
+      sortSel.value = S.sortBy;
+      sortSel.onchange = function () {
+        S.sortBy = sortSel.value;
+        try { localStorage.setItem('slate-sortby', S.sortBy); } catch (e) { /* private mode */ }
+        renderList();
+      };
+    }
+
+    bindImgResize();
+    bindImgDrag();
+    bindPaneResize();
+    bindRubberBand();
     bindDrawerSwipe();
 
     window.addEventListener('beforeunload', function () {
@@ -3597,6 +4532,9 @@
     DB.estimate().then(function (est) {
       var txt = plural(liveNotes().length, 'note');
       if (est && est.usage) txt += ' · ' + (est.usage / 1048576).toFixed(1) + ' MB';
+      // Say so when running on the small fallback store, rather than let
+      // someone discover the ceiling by hitting it.
+      if (est && est.fallback) txt += ' of 5 MB · limited storage';
       $('storageLine').textContent = txt;
     });
   }
@@ -3681,6 +4619,7 @@
     applyFont();
     applyUiFont();
     applyUiScale();
+    applyPaneWidths();
 
     History.configure({ apply: applyRecords, onChange: renderUndoButtons });
 

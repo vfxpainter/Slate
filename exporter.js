@@ -174,8 +174,29 @@
 
   /* ---------- HTML rendering (shared by .html export and print/PDF) ---------- */
 
+  /* The one place a text note turns into HTML.
+
+     The editor and this file used to do it separately: the editor synthesises
+     markup when a note has no stored bodyHtml, while the exporter read that
+     field raw and, finding nothing, fell back to plain paragraphs plus a strip
+     of pictures at the end. Same note, two layouts -- which is why a picture
+     wrapped neatly in the note came out dumped underneath the text in the PDF.
+     Both start from this now. */
+  function richBodyOf(note) {
+    if (note.bodyHtml) return note.bodyHtml;
+    var html = String(note.body || '').split(/\n{2,}/).map(function (para) {
+      if (!para.trim()) return '';
+      return '<p>' + esc(para).replace(/\n/g, '<br>') + '</p>';
+    }).filter(Boolean).join('');
+    (note.images || []).forEach(function (id) {
+      html += '<p><img data-img="' + esc(id) + '" class="ni ni-center" style="width:60%"></p>';
+    });
+    return html;
+  }
+
   function noteBodyHTML(note, imgs, opts) {
     var h = [];
+    var rich = note.type === 'text' ? richBodyOf(note) : '';
     if (note.type === 'list') {
       h.push('<ul class="s-list">');
       (note.items || []).forEach(function (it) {
@@ -199,30 +220,29 @@
       if (svg) h.push('<div class="s-map">' + svg + '</div>');
       var outline = mapToOutline(note.map, '    ');
       if (outline) h.push('<pre class="s-outline">' + esc(outline) + '</pre>');
-    } else if (note.bodyHtml) {
-      // Rich body: swap each data-img reference for the embedded picture,
-      // keeping the width and float the note gave it so the text still wraps.
-      h.push(note.bodyHtml.replace(/<img\b[^>]*>/gi, function (tag) {
+    } else {
+      // Swap each data-img reference for the embedded picture, keeping the
+      // width and the wrap the note gave it so the text flows the same way.
+      h.push(rich.replace(/<img\b[^>]*>/gi, function (tag) {
         var m = tag.match(/data-img="([^"]+)"/);
         var rec = m && imgs[m[1]];
         if (!rec) return '';
         var cls = (tag.match(/class="([^"]*)"/) || [null, 'ni ni-center'])[1];
         var w = (tag.match(/width:\s*([\d.]+%)/) || [null, '60%'])[1];
-        return '<img class="' + cls + '" style="width:' + w + '" src="' + rec.url + '" alt="">';
+        var style = 'width:' + w;
+        // a freely placed picture keeps its coordinates on the page
+        if (/ni-free/.test(cls)) {
+          var fx = (tag.match(/data-fx="(-?\d+)"/) || [null, '0'])[1];
+          var fy = (tag.match(/data-fy="(-?\d+)"/) || [null, '0'])[1];
+          style += ';left:' + fx + 'px;top:' + fy + 'px';
+        }
+        return '<img class="' + cls + '" style="' + style + '" src="' + rec.url + '" alt="">';
       }));
-    } else {
-      var paras = String(note.body || '').split(/\n{2,}/);
-      paras.forEach(function (p) {
-        if (!p.trim()) return;
-        h.push('<p>' + esc(p).replace(/\n/g, '<br>') + '</p>');
-      });
     }
     // only images that were never placed in the text get the strip at the end
-    var placedIds = note.bodyHtml
-      ? (note.bodyHtml.match(/data-img="([^"]+)"/g) || []).map(function (x) {
-          return x.slice(10, -1);
-        })
-      : [];
+    var placedIds = (rich.match(/data-img="([^"]+)"/g) || []).map(function (x) {
+      return x.slice(10, -1);
+    });
     var pics = (note.images || []).filter(function (id) {
       return placedIds.indexOf(id) === -1;
     }).map(function (id) { return imgs[id]; }).filter(Boolean);
@@ -265,6 +285,8 @@
     'img.ni-right{float:right;margin:.25em 0 .6em 1.1em}',
     'img.ni-center{display:block;margin:.8em auto}',
     'img.ni-full{display:block;margin:.8em 0;width:100%}',
+    'img.ni-free{position:absolute;float:none;margin:0}',
+    '.s-note{position:relative}',
     '.s-note::after{content:"";display:block;clear:both}',
     '.s-gal img{max-width:100%;border-radius:6px;border:1px solid #e3e0d9}',
     '.s-folder{font:600 .8rem/1 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;',
@@ -506,12 +528,96 @@
     });
   }
 
-  function exportBundle(notesOrNull, name) {
+  /* ---------- compressing the backup ----------
+     Gzip is a large saving on the text and roughly none on the pictures, which
+     are compressed already -- so this pairs with shrinking images on the way
+     in rather than replacing it. Import sniffs the gzip magic number, so plain
+     .json backups written before this keep working untouched. */
+  function gzip(text) {
+    if (typeof CompressionStream !== 'function') return Promise.resolve(null);
+    try {
+      var stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+      return new Response(stream).blob();
+    } catch (e) { return Promise.resolve(null); }
+  }
+
+  function gunzip(blob) {
+    var stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+
+  function looksGzipped(buf) {
+    var b = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+    return b.length === 2 && b[0] === 0x1f && b[1] === 0x8b;
+  }
+
+  /* An encrypted backup is not compressed: ciphertext does not compress, and
+     gzipping first would leak the size of the plaintext. Plain backups get
+     gzip; encrypted ones get the envelope. */
+  function exportBundle(notesOrNull, name, opts) {
+    opts = opts || {};
     return buildBundle(notesOrNull).then(function (bundle) {
-      download((name || 'sulat-backup-' + stamp()) + '.json',
-        new Blob([JSON.stringify(bundle)], { type: 'application/json' }));
-      return bundle.counts;
+      var text = JSON.stringify(bundle);
+      var base = name || 'sulat-backup-' + stamp();
+      var counts = bundle.counts;
+
+      if (opts.password) {
+        return global.Lock.encryptBundle(text, opts.password).then(function (env) {
+          var body = JSON.stringify(env);
+          counts.bytes = body.length;
+          counts.encrypted = true;
+          return writeOut(base + '.sulat',
+            new Blob([body], { type: 'application/json' }), opts).then(function () {
+            return counts;
+          });
+        });
+      }
+
+      var compress = opts.compress !== false;
+      return (compress ? gzip(text) : Promise.resolve(null)).then(function (gz) {
+        var use = (gz && gz.size < text.length)
+          ? { name: base + '.json.gz', blob: gz, bytes: gz.size }
+          : { name: base + '.json',
+              blob: new Blob([text], { type: 'application/json' }), bytes: text.length };
+        counts.bytes = use.bytes;
+        counts.wasBytes = text.length;
+        return writeOut(use.name, use.blob, opts).then(function () { return counts; });
+      });
     });
+  }
+
+  /* ---------- where the file goes ----------
+     With a linked file, every backup overwrites the same one -- no dialog and
+     no drift of dated copies through the Downloads folder. Chrome asks the
+     person to confirm the handle again each session; when it says no, or the
+     browser has no File System Access at all, this falls back to a download so
+     a backup is never simply lost. */
+  var _linked = null;                        // FileSystemFileHandle, this session
+
+  function hasFilePicker() { return typeof global.showSaveFilePicker === 'function'; }
+
+  function linkBackupFile(suggested) {
+    if (!hasFilePicker()) {
+      return Promise.reject(new Error('This browser cannot link a file.'));
+    }
+    return global.showSaveFilePicker({
+      suggestedName: suggested || ('sulat-backup-' + stamp() + '.json.gz'),
+      types: [{ description: 'Sulat backup', accept: { 'application/json': ['.json', '.gz', '.sulat'] } }]
+    }).then(function (handle) { _linked = handle; return handle.name; });
+  }
+
+  function linkedName() { return _linked ? _linked.name : null; }
+  function unlinkBackupFile() { _linked = null; }
+
+  function writeOut(name, blob, opts) {
+    if (!(opts && opts.toLinked && _linked)) {
+      download(name, blob);
+      return Promise.resolve(false);
+    }
+    return _linked.createWritable().then(function (w) {
+      return w.write(blob).then(function () { return w.close(); });
+    }).then(function () { return true; })
+      .catch(function () { download(name, blob); return false; });
   }
 
   /* ---------- daily snapshots kept on the device ----------
@@ -692,10 +798,26 @@
   // importing never creates a second "Ideas" or "Work". A note that arrives
   // under a new id but with byte-identical content to one already here is
   // recognised as the same note rather than added again.
-  function importBundle(file) {
-    return file.text().then(function (txt) {
+  function importBundle(file, opts) {
+    // read as bytes first, so a gzipped backup can be told apart from JSON
+    return file.arrayBuffer().then(function (buf) {
+      if (looksGzipped(buf)) return gunzip(new Blob([buf]));
+      return new Blob([buf]).text();
+    }).then(function (txt) {
       var b;
       try { b = JSON.parse(txt); } catch (e) { throw new Error('That file is not valid JSON.'); }
+      if (b && b.format === 'sulat-encrypted') {
+        if (!opts || !opts.password) {
+          var need = new Error('This backup is encrypted.');
+          need.needsPassword = true;
+          throw need;
+        }
+        return global.Lock.decryptBundle(b, opts.password).then(function (plain) {
+          return JSON.parse(plain);
+        });
+      }
+      return b;
+    }).then(function (b) {
       if (!b || BUNDLE_FORMATS.indexOf(b.format) < 0) throw new Error('Not a Sulat backup file.');
       if ((b.version || 0) > BUNDLE_VERSION) throw new Error('That backup is from a newer version of Sulat.');
 
@@ -792,6 +914,10 @@
     snapshotImageIds: snapshotImageIds,
     snapshotBlob: snapshotBlob,
     importBundle: importBundle,
+    linkBackupFile: linkBackupFile,
+    linkedName: linkedName,
+    unlinkBackupFile: unlinkBackupFile,
+    hasFilePicker: hasFilePicker,
     printNotes: printNotes,
     mapToImageBlob: mapToImageBlob,
     noteToMarkdown: noteToMarkdown,

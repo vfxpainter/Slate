@@ -64,9 +64,23 @@
       <button class="ghost-btn" data-act="toggle-select">Done</button>
     </div>
 
-    <div class="list-title" id="listTitle"></div>
+    <div class="list-bar">
+      <div class="list-title" id="listTitle"></div>
+      <select class="sort-select" id="sortBy" title="Sort notes">
+        <option value="edited">Last edited</option>
+        <option value="oldest">Oldest edit</option>
+        <option value="created">Newest first</option>
+        <option value="az">Title A–Z</option>
+        <option value="za">Title Z–A</option>
+        <option value="type">Type</option>
+      </select>
+    </div>
     <div class="note-scroll" id="noteList"></div>
   </section>
+
+  <div class="resizer" data-resize="nav" title="Drag to resize · double-click to reset"></div>
+  <div class="resizer" data-resize="list" title="Drag to resize · double-click to reset"></div>
+  <div class="rubber" id="rubber" hidden></div>
 
   <!-- ============ EDITOR ============ -->
   <main class="pane pane-editor" id="paneEditor">
@@ -114,11 +128,24 @@
         <!-- text -->
         <div class="note-text note-rich" id="noteRich" contenteditable="true"
              spellcheck="true" data-placeholder="Write…"></div>
+        <div class="img-grip" id="imgGrip" hidden title="Drag to resize"></div>
         <div class="img-bar" id="imgBar" hidden>
-          <button data-act="img-align" data-align="left"   title="Wrap text on the right">&#9704;</button>
-          <button data-act="img-align" data-align="center" title="Centre, on its own line">&#9635;</button>
-          <button data-act="img-align" data-align="right"  title="Wrap text on the left">&#9706;</button>
-          <button data-act="img-align" data-align="full"   title="Full width">&#9644;</button>
+          <button data-act="img-align" data-align="left" title="Text wraps down the right">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><rect class="f" x="1" y="3" width="8" height="10" rx="1"/><g class="l"><rect x="11" y="4" width="8" height="1.5" rx=".75"/><rect x="11" y="7.5" width="8" height="1.5" rx=".75"/><rect x="11" y="11" width="5" height="1.5" rx=".75"/></g></svg>
+          </button>
+          <button data-act="img-align" data-align="center" title="Centred, text above and below">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><g class="l"><rect x="1" y="1" width="18" height="1.5" rx=".75"/></g><rect class="f" x="5" y="4" width="10" height="8" rx="1"/><g class="l"><rect x="1" y="13.5" width="18" height="1.5" rx=".75"/></g></svg>
+          </button>
+          <button data-act="img-align" data-align="right" title="Text wraps down the left">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><rect class="f" x="11" y="3" width="8" height="10" rx="1"/><g class="l"><rect x="1" y="4" width="8" height="1.5" rx=".75"/><rect x="1" y="7.5" width="8" height="1.5" rx=".75"/><rect x="1" y="11" width="5" height="1.5" rx=".75"/></g></svg>
+          </button>
+          <button data-act="img-align" data-align="full" title="Full width">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><rect class="f" x="1" y="3" width="18" height="10" rx="1"/></svg>
+          </button>
+          <span class="img-bar-sep"></span>
+          <button data-act="img-free" id="imgFreeBtn" title="Free placement — drag anywhere, text ignores it">
+            <svg viewBox="0 0 20 16" aria-hidden="true"><g class="l"><rect x="1" y="2" width="18" height="1.5" rx=".75"/><rect x="1" y="12.5" width="18" height="1.5" rx=".75"/></g><rect class="f" x="6" y="5" width="9" height="7" rx="1"/></svg>
+          </button>
           <span class="img-bar-sep"></span>
           <button data-act="img-smaller" title="Smaller">&#8722;</button>
           <span class="img-size" id="imgSize">50%</span>
@@ -202,7 +229,7 @@
 <dialog id="dlg" class="dlg"><div class="dlg-inner" id="dlgInner"></div></dialog>
 <div id="toast" class="toast" hidden></div>
 <input type="file" id="filePick" accept="image/*" multiple hidden>
-<input type="file" id="bundlePick" accept="application/json,.json,.sulat,.slate" hidden>
+<input type="file" id="bundlePick" accept="application/json,application/gzip,.json,.gz,.sulat,.slate" hidden>
 <div id="printRoot" class="print-root"></div>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt=""></div>
 

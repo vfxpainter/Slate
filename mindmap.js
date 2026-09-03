@@ -129,6 +129,7 @@
     this._linking = null;      // { from } while dragging out of a connector
     this._resizing = null;     // { node, w0, sx }
     this._imgCache = {};       // imageId -> HTMLImageElement | 'loading' | null
+    this._ratio = {};          // imageId -> width/height, kept once known
     this._pointers = new Map();
     this._drag = null;
     this._pinch = null;
@@ -313,6 +314,12 @@
         var im = new Image();
         im.onload = function () {
           self._imgCache[n.image] = im;
+          // Keep the real ratio against the node. Until an image has loaded its
+          // naturalWidth is 0, and the placeholder used to guess 3:2 -- so a
+          // portrait photo drew stretched, then snapped when it arrived.
+          if (im.naturalWidth && im.naturalHeight) {
+            self._ratio[n.image] = im.naturalWidth / im.naturalHeight;
+          }
           self._layout();
           self.draw();
         };
@@ -399,14 +406,18 @@
                       : this._wrapTo(n.text, wrapWidthFor(n._fs));
 
       var im = n.image ? this._imgCache[n.image] : null;
-      if (im && im !== 'loading') {
+      if (im && im !== 'loading' && im.naturalWidth) {
         var cap = inner || IMG_MAX_W;
         var capH = inner ? IMG_MAX_H * 3 : IMG_MAX_H;
         var scale = Math.min(cap / im.naturalWidth, capH / im.naturalHeight, inner ? 6 : 1);
         n.imgW = Math.round(im.naturalWidth * scale);
         n.imgH = Math.round(im.naturalHeight * scale);
       } else if (n.image) {
-        n.imgW = inner || 90; n.imgH = Math.round((inner || 90) * 0.66);
+        // not loaded yet: reserve a box in the right shape, square if unknown
+        var ar = this._ratio[n.image] || 1;
+        var pw = inner || 90;
+        n.imgW = Math.round(pw);
+        n.imgH = Math.round(pw / ar);
       } else {
         n.imgW = 0; n.imgH = 0;
       }
@@ -422,6 +433,20 @@
       // round shapes need slack, or the text pokes out of the outline
       n.w = n.w0 || Math.round(contentW * shape.padX);
       n.h = n.h0 || Math.round(contentH * shape.padY);
+
+      /* A node dragged smaller than its contents used to let the picture spill
+         over the outline. Fit the image inside what the node actually is, on
+         both axes at once so the proportions are never touched. */
+      if (n.imgH) {
+        var availW = n.w / shape.padX - PAD_X * 2;
+        var availH = n.h / shape.padY - PAD_Y * 2 -
+                     n.lines.length * n._lh - (n.lines.length ? IMG_GAP : 0);
+        var fit = Math.min(1, availW / n.imgW, availH / n.imgH);
+        if (fit > 0 && fit < 1) {
+          n.imgW = Math.max(8, Math.round(n.imgW * fit));
+          n.imgH = Math.max(8, Math.round(n.imgH * fit));
+        }
+      }
 
       if (shape.equal) {
         var side = Math.max(n.w, n.h);

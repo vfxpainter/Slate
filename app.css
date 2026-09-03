@@ -1,5 +1,13 @@
 /* Sulat - warm paper palette, three panes on desktop, one pane at a time on phones. */
 
+/* Tell the browser which way round the page is. Without this the app paints a
+   dark theme in CSS while the browser still renders its own controls for a
+   light one -- which is why the open dropdown had a pale menu with pale text
+   and the highlighted row was unreadable. It also fixes scrollbars, the caret
+   and form autofill. */
+:root { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 :root {
   --bg: #f6f4ef;
   --pane: #fffdf8;
@@ -650,12 +658,16 @@ button { cursor: pointer; background: none; border: 0; }
   align-content: start;
   gap: .45rem;
   padding: 0 .5rem 2rem;
+  /* Size each row to the tallest card in it. Left to itself the grid sized rows
+     from the cards' min-height instead of their content, so any card with more
+     than a couple of lines overlapped the one below. */
+  grid-auto-rows: min-content;
 }
 /* the tile views need a wider list pane, or two tracks will not fit */
 .app[data-view-mode="grid"] { --list-w: 400px; }
 .app[data-view-mode="large"] { --list-w: 460px; }
-.app[data-view-mode="grid"] .note-scroll { grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); }
-.app[data-view-mode="large"] .note-scroll { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.app[data-view-mode="grid"] .note-scroll { grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.6rem), 1fr)); }
+.app[data-view-mode="large"] .note-scroll { grid-template-columns: repeat(auto-fill, minmax(min(100%, 12.5rem), 1fr)); }
 
 .app[data-view-mode="grid"] .card,
 .app[data-view-mode="large"] .card {
@@ -664,11 +676,19 @@ button { cursor: pointer; background: none; border: 0; }
   margin: 0;
   min-height: 84px;
   align-content: start;
+  /* Size each tile to its own content. Without this a tile is stretched to the
+     row height, which the grid worked out from min-height rather than from what
+     is in the card -- so a card taller than 84px spilled its date and folder
+     chip out over the tile below. */
+  align-self: start;
 }
 .app[data-view-mode="grid"] .card-snip { -webkit-line-clamp: 4; line-clamp: 4; }
 .app[data-view-mode="large"] .card-snip { -webkit-line-clamp: 8; line-clamp: 8; }
 .app[data-view-mode="grid"] .card-title,
-.app[data-view-mode="large"] .card-title { white-space: normal; }
+.app[data-view-mode="large"] .card-title {
+  white-space: normal;
+  overflow-wrap: anywhere;   /* a long title wraps rather than widening the card */
+}
 
 .app[data-view-mode="grid"] .list-tools,
 .app[data-view-mode="large"] .list-tools,
@@ -708,7 +728,12 @@ kbd {
 @media (max-width: 900px) {
   .row .nudge, .row .kill { opacity: .7; padding: .35rem .3rem; }
   .select-bar { gap: .2rem; }
-  .app[data-view-mode="grid"] .note-scroll { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+  .app[data-view-mode="grid"] .note-scroll {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr));
+  }
+  .app[data-view-mode="large"] .note-scroll {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  }
 }
 
 /* ============ added: sub-items, folder rows, note dragging, map colours ============ */
@@ -1414,3 +1439,209 @@ body.dragging-note .card-grip { cursor: grabbing; }
    or a deliberate lowercase title is never rewritten in the data. */
 .card-title { text-transform: capitalize; }
 .dlg p.sub.tight { margin: -.5rem 0 1rem; font-size: .8rem; }
+
+/* ---- tile views: give the title the width it needs ----
+   A tile column is narrow, and the drag grip plus the select box were taking
+   most of it, leaving titles wrapping one word per line. Both have full-size
+   homes in list view, so tiles show the box only while you are selecting and
+   drop the grip entirely -- dragging a note into a folder stays a list-view
+   gesture, where there is room to aim. */
+.app[data-view-mode="grid"] .card-grip,
+.app[data-view-mode="large"] .card-grip { display: none; }
+
+.app[data-view-mode="grid"]:not([data-selecting]) .card-check,
+.app[data-view-mode="large"]:not([data-selecting]) .card-check { display: none; }
+
+/* ---- a visible line between the heading block and where you write ----
+   Put on the content itself rather than under the title, so it lands in the
+   same place whether or not the note has tags. */
+.note-rich, .list-editor, .map-editor {
+  border-top: 1px solid var(--line);
+  padding-top: .9rem;
+  margin-top: .2rem;
+}
+
+/* ---- sort ---- */
+.list-bar {
+  display: flex; align-items: center; gap: .5rem;
+  padding-right: .6rem;
+}
+.list-bar .list-title { flex: 1 1 auto; min-width: 0; }
+.sort-select {
+  flex: 0 0 auto;
+  font: inherit; font-size: .74rem;
+  color: var(--ink-3); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--r);
+  padding: .2rem 1.3rem .2rem .4rem; cursor: pointer;
+  max-width: 9rem;
+}
+.sort-select:hover { color: var(--ink); border-color: var(--ink-3); }
+.sort-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- tell the three kinds of note apart at a glance ----
+   The marker was there already but read as decoration; colour separates the
+   three without adding a second indicator. */
+.card-kind { font-size: .9rem; opacity: 1; }
+.card-kind.k-text    { color: var(--ink-3); }
+.card-kind.k-list    { color: #5f8a55; }
+.card-kind.k-mindmap { color: var(--accent); }
+.card-kind.k-locked  { color: var(--ink-3); }
+[data-theme="dark"] .card-kind.k-list { color: #7ea877; }
+
+/* the image being dragged inside a note */
+.note-rich img.ni-dragging { opacity: .4; }
+
+/* ---- dragging the pane edges ----
+   Two thin handles sitting over the grid lines. Only on wide screens: the
+   phone layout shows one pane at a time, so there is no edge to drag. */
+.resizer { display: none; }
+@media (min-width: 901px) {
+  .resizer {
+    display: block; position: absolute; top: 0; bottom: 0;
+    width: 9px; margin-left: -4px; z-index: 40; cursor: col-resize;
+  }
+  .resizer[data-resize="nav"]  { left: var(--nav-w); }
+  .resizer[data-resize="list"] { left: calc(var(--nav-w) + var(--list-w)); }
+  .resizer::after {
+    content: ""; position: absolute; inset: 0 4px;
+    background: transparent; transition: background .12s;
+  }
+  .resizer:hover::after, .resizer.on::after { background: var(--accent); }
+}
+body.resizing { cursor: col-resize; user-select: none; }
+
+/* ---- rubber-band selection over the note list ---- */
+.rubber {
+  position: fixed; z-index: 45; pointer-events: none;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft, rgba(168,98,47,.14));
+}
+
+/* the recovery code, shown once - big enough to copy off the screen by hand */
+.reccode {
+  font: 600 1.05rem/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  letter-spacing: .06em;
+  background: var(--sel); border: 1px solid var(--line); border-radius: var(--r);
+  padding: .7rem .8rem; margin: .3rem 0 .9rem;
+  user-select: all; word-break: break-all; text-align: center;
+}
+
+/* ---- drag the corner of an image to scale it ----
+   The grip sits over the picture rather than inside the editable region, so
+   resizing never leaves stray markup in the note. */
+.img-grip {
+  position: absolute; z-index: 22;
+  width: 16px; height: 16px;
+  border: 2px solid var(--accent);
+  background: var(--bg);
+  border-radius: 3px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.img-grip:hover, .img-grip.on { background: var(--accent); }
+body.img-resizing { cursor: nwse-resize; user-select: none; }
+.note-rich img.ni { cursor: grab; }
+.note-rich img.ni-sel { cursor: grab; }
+
+/* ---- image bar icons ----
+   Drawn, not typed: the wrap arrows were rendering as empty boxes on fonts
+   without those glyphs. */
+.img-bar svg { width: 20px; height: 16px; display: block; }
+.img-bar svg .f { fill: currentColor; opacity: .85; }
+.img-bar svg .l { fill: currentColor; opacity: .45; }
+.img-bar button.on { background: var(--accent); color: #fff; }
+
+/* ---- a freely placed image ----
+   Out of the flow, moved only by transform, so dragging never triggers layout
+   and the text underneath is left alone. */
+.note-rich { position: relative; }
+.note-rich img.ni-free {
+  position: absolute; left: 0; top: 0;
+  float: none; margin: 0; z-index: 3;
+  will-change: transform;
+}
+
+/* while a drag is running */
+.note-rich img.ni-drag {
+  z-index: 9; pointer-events: none;
+  box-shadow: 0 10px 28px rgba(0,0,0,.35);
+  will-change: transform;
+}
+body.img-dragging { user-select: none; cursor: grabbing; }
+body.img-dragging .note-rich { cursor: grabbing; }
+.note-rich img.ni { touch-action: none; }
+
+/* Belt and braces for the dropdown list itself: some platforms ignore the
+   inherited colour on the popup, so state it. */
+select option {
+  background: var(--pane);
+  color: var(--ink);
+}
+
+/* ---- folder colours ----
+   Carried on the folder's own marker and on the folder chip of every note
+   filed inside it, so a note tells you where it lives without being read. */
+[data-fcolor] { color: var(--fc, var(--ink-3)); }
+[data-fcolor="red"]    { --fc: #b0503f; }
+[data-fcolor="orange"] { --fc: #b0722f; }
+[data-fcolor="yellow"] { --fc: #97801f; }
+[data-fcolor="green"]  { --fc: #4f7a4a; }
+[data-fcolor="blue"]   { --fc: #3d6f96; }
+[data-fcolor="purple"] { --fc: #6b5a9e; }
+[data-fcolor="pink"]   { --fc: #a8517a; }
+[data-fcolor="grey"]   { --fc: #7b766a; }
+:root[data-theme="dark"] [data-fcolor="red"]    { --fc: #d8836f; }
+:root[data-theme="dark"] [data-fcolor="orange"] { --fc: #d2954f; }
+:root[data-theme="dark"] [data-fcolor="yellow"] { --fc: #c9b04e; }
+:root[data-theme="dark"] [data-fcolor="green"]  { --fc: #86ad7c; }
+:root[data-theme="dark"] [data-fcolor="blue"]   { --fc: #6ea3c9; }
+:root[data-theme="dark"] [data-fcolor="purple"] { --fc: #9b8ccd; }
+:root[data-theme="dark"] [data-fcolor="pink"]   { --fc: #d288aa; }
+:root[data-theme="dark"] [data-fcolor="grey"]   { --fc: #9b968a; }
+
+.nav-item .ico[data-fcolor] { opacity: 1; }
+.card-folder[data-fcolor] {
+  color: var(--fc);
+  border-color: color-mix(in srgb, var(--fc) 45%, transparent);
+}
+
+/* the swatch row in the folder menu */
+.fcolors { display: flex; flex-wrap: wrap; gap: .4rem; margin: .2rem 0 1rem; }
+.fswatch {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid var(--line); background: var(--pane-2);
+  cursor: pointer; padding: 0;
+}
+.fswatch[data-fcolor] { background: var(--fc); border-color: transparent; }
+.fswatch.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fswatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- Backup & transfer, simplified ----
+   Two primary actions, the automatic backup set apart, everything else folded
+   into a disclosure so the panel opens small. */
+.auto-box {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: .7rem .8rem;
+  margin: .9rem 0;
+  background: var(--pane-2);
+}
+.auto-box .check { margin: 0; font-weight: 600; }
+.auto-box .sub.tight { margin: .35rem 0 .55rem; }
+.auto-box .ghost-btn { padding: .3rem .6rem; }
+
+.more-box { margin-bottom: .6rem; }
+.more-box > summary {
+  cursor: pointer;
+  font-size: .8rem;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: .35rem 0;
+  list-style: none;
+}
+.more-box > summary::-webkit-details-marker { display: none; }
+.more-box > summary::before { content: "\25B8  "; }
+.more-box[open] > summary::before { content: "\25BE  "; }
+.more-box > summary:hover { color: var(--ink); }
+.more-box .opt-grid { margin-top: .5rem; }
