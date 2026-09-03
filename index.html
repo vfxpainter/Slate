@@ -87,8 +87,14 @@
     <header class="pane-head">
       <button class="icon-btn only-narrow" data-act="editor-back" title="Back">&#8592;</button>
       <button class="folder-chip" data-act="move" id="editorCrumb" title="Move to another folder"></button>
-      <button class="icon-btn" data-act="undo" id="undoBtn" title="Undo (Ctrl+Z)">&#8630;</button>
-      <button class="icon-btn" data-act="redo" id="redoBtn" title="Redo (Ctrl+Shift+Z)">&#8631;</button>
+      <div class="undo-pair">
+        <button class="icon-btn" data-act="undo" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+        </button>
+        <button class="icon-btn" data-act="redo" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>
+        </button>
+      </div>
       <button class="icon-btn" data-act="add-image" title="Add image">&#128247;</button>
       <button class="icon-btn" data-act="toggle-full" id="fullBtn"
               title="Full screen (Esc to leave)">&#11036;</button>

@@ -1770,3 +1770,39 @@ select option {
     margin-bottom: .3rem;
   }
 }
+
+/* ---- undo and redo ----
+   These were two faint glyphs among six identical icons, and the characters
+   themselves are missing from many system fonts. Now drawn, grouped into one
+   bordered pair so they read as a single control, and kept at a full-size
+   touch target on a phone -- where they matter most, since there is no Ctrl+Z. */
+.undo-pair {
+  display: flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--pane);
+}
+.undo-pair .icon-btn {
+  border-radius: 0;
+  width: 36px;
+  color: var(--ink);
+}
+.undo-pair .icon-btn + .icon-btn { border-left: 1px solid var(--line); }
+.undo-pair .icon-btn svg {
+  width: 17px; height: 17px;
+  fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.undo-pair .icon-btn:not(:disabled):hover { background: var(--sel); color: var(--accent); }
+.undo-pair .icon-btn:not(:disabled):active { background: var(--accent-soft); }
+
+/* Disabled says "nothing to undo yet", not "this button is broken", so it
+   fades rather than vanishing -- .3 was faint enough to read as missing. */
+.undo-pair .icon-btn:disabled { opacity: .35; }
+
+@media (max-width: 900px) {
+  .undo-pair .icon-btn { width: 42px; height: 40px; }
+  .undo-pair .icon-btn svg { width: 19px; height: 19px; }
+}
