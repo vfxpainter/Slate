@@ -458,7 +458,13 @@ button { cursor: pointer; background: none; border: 0; }
 .map-tools .ghost-btn { border: 1px solid var(--line); }
 .map-hint { font-size: .72rem; color: var(--ink-3); margin-bottom: .5rem; }
 .map-canvas-wrap {
-  height: min(62vh, 560px);
+  /* Grows with the window instead of stopping at a fixed 560px, which left a
+     band of empty editor underneath on anything but a small screen. The corner
+     grip is the browser's own -- `resize` needs a non-visible overflow, which
+     this already had. */
+  height: clamp(340px, calc(100vh - 19rem), 1100px);
+  min-height: 240px;
+  resize: vertical;
   border: 1px solid var(--line);
   border-radius: var(--r);
   overflow: hidden;
@@ -1665,3 +1671,102 @@ select option {
 .more-box[open] > summary::before { content: "\25BE  "; }
 .more-box > summary:hover { color: var(--ink); }
 .more-box .opt-grid { margin-top: .5rem; }
+
+/* ---- the mindmap filling the window ----
+   Everything else is hidden rather than unmounted, so the canvas keeps its
+   camera, its selection and its undo history while you are in here. */
+/* ---- full screen ----
+   The sidebar and the note list step aside; the editor header stays, because
+   hiding it would take away the only visible way back out. What happens inside
+   depends on what is being edited: a canvas wants every pixel, while prose
+   keeps its reading measure and simply gets calmer surroundings. */
+.app[data-full] .pane-nav,
+.app[data-full] .pane-list { display: none; }
+
+.app[data-full] .pane-editor { grid-area: 1 / 1 / -1 / -1; }
+.app[data-full] #fullBtn { background: var(--accent); color: #fff; }
+
+/* prose and lists: same line length, more air around it */
+.app[data-full] .editor-body { padding-top: 2rem; }
+
+/* a mindmap: hand the whole window to the canvas */
+.app[data-full][data-notetype="mindmap"] .note-title,
+.app[data-full][data-notetype="mindmap"] .note-meta,
+.app[data-full][data-notetype="mindmap"] .tag-row,
+.app[data-full][data-notetype="mindmap"] .gallery { display: none; }
+
+.app[data-full][data-notetype="mindmap"] .editor-scroll { padding: 0; overflow: hidden; }
+.app[data-full][data-notetype="mindmap"] .editor-body {
+  padding: .6rem .7rem 0;
+  max-width: none;
+}
+.app[data-full][data-notetype="mindmap"] .map-editor {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+.app[data-full][data-notetype="mindmap"] .map-canvas-wrap {
+  /* !important because a height you dragged lives in the element's own style
+     attribute, which would otherwise win and leave this full-width but short.
+     The dragged value is untouched and comes back on exit. */
+  height: calc(100vh - 6.5rem) !important;
+  max-height: none;
+  resize: none;
+}
+
+/* ---- a mindmap gets the whole pane ----
+   .editor-body is capped at a reading width so long-form text stays readable.
+   A canvas has no such need, and the cap was wasting roughly a third of a wide
+   screen on empty margin. The map fills the pane and, on anything but a phone,
+   the canvas takes whatever height is left rather than sitting below the fold. */
+.app[data-notetype="mindmap"] .editor-body {
+  max-width: none;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 901px) {
+  .app[data-notetype="mindmap"] .editor-scroll { overflow: hidden; }
+  .app[data-notetype="mindmap"] .editor-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding-bottom: 1rem;
+  }
+  .app[data-notetype="mindmap"] .map-editor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;          /* without this a flex child refuses to shrink */
+  }
+  .app[data-notetype="mindmap"] .map-canvas-wrap {
+    flex: 1;
+    height: auto;
+    min-height: 220px;
+    resize: none;           /* it already fills; there is nothing to drag into */
+  }
+}
+
+/* ---- a mindmap needs the height more than it needs a big title ----
+   The central node already names the map, so the heading block earns less
+   room here than it does above a page of prose. Trimmed on wide screens only;
+   on a phone the title is the one thing that has to stay legible. */
+@media (min-width: 901px) {
+  .app[data-notetype="mindmap"] .editor-body { padding-top: .7rem; }
+  .app[data-notetype="mindmap"] .note-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+  .app[data-notetype="mindmap"] .note-meta {
+    font-size: .66rem;
+    margin-bottom: .45rem;
+  }
+  .app[data-notetype="mindmap"] .map-editor {
+    padding-top: .5rem;
+    margin-top: 0;
+  }
+  .app[data-notetype="mindmap"] .map-hint {
+    font-size: .68rem;
+    margin-bottom: .3rem;
+  }
+}

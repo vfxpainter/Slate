@@ -1082,6 +1082,13 @@
     $('listEditor').hidden = !isList;
     $('mapEditor').hidden = !isMap;
 
+    /* The editor column is held to a reading width, which is right for prose
+       and wrong for a canvas -- it left a mindmap boxed into the middle of a
+       wide screen with dead margin either side. Mark the open note's kind so
+       the stylesheet can let the map have the whole pane. */
+    if (isMap) $('app').dataset.notetype = 'mindmap';
+    else delete $('app').dataset.notetype;
+
     if (isText) {
       renderRich();
       renderGallery();      // again: it needs to know which images are now inline
@@ -3751,6 +3758,7 @@ function toggleImgFree() {
       $('mapLineVal').textContent = S.map.nudgeEdgeWidth(0.4);
       focusMap();
     },
+    'toggle-full': function () { toggleFullScreen(); },
     'map-style-toggle': function () {
       var hidden = $('mapEditor').classList.toggle('style-off');
       $('styleBtn').classList.toggle('on', !hidden);
@@ -4011,6 +4019,63 @@ function toggleImgFree() {
       }
       renderSelectBar();
     });
+  }
+
+  /* ---------- how big the mindmap is ----------
+     The wrapper carries a native resize grip, so dragging it is the browser's
+     job; ours is to tell the canvas its size changed and to remember the
+     height, since a canvas does not reflow on its own. */
+  function bindMapSize() {
+    var wrap = document.querySelector('.map-canvas-wrap');
+    if (!wrap) return;
+
+    var saved = parseInt(localStorage.getItem('sulat-mapheight'), 10);
+    if (saved > 200) wrap.style.height = saved + 'px';
+
+    var lastH = 0;
+
+    function sync() {
+      var h = Math.round(wrap.getBoundingClientRect().height);
+      if (!h || h === lastH) return;
+      lastH = h;
+      if (S.map) S.map.resize();
+      // remember only a height the person set, not one the window imposed
+      if (!$('app').dataset.full && wrap.style.height) {
+        try { localStorage.setItem('sulat-mapheight', parseInt(wrap.style.height, 10)); }
+        catch (e) { /* private mode */ }
+      }
+    }
+
+    /* ResizeObserver is the tidy way to notice the grip being dragged, but it
+       is throttled in a background view and stops entirely in a hidden one --
+       the same trap as requestAnimationFrame. So it is the fast path, not the
+       only one: a pointer released over the wrapper and a window resize both
+       run the same check, and neither can be paused out of existence. */
+    if (typeof ResizeObserver === 'function') {
+      var settle = 0;
+      new ResizeObserver(function () {
+        clearTimeout(settle);
+        settle = setTimeout(sync, 60);
+      }).observe(wrap);
+    }
+    wrap.addEventListener('pointerup', function () { setTimeout(sync, 30); });
+    window.addEventListener('resize', function () { setTimeout(sync, 80); });
+    document.addEventListener('sulat:mapshown', sync);
+  }
+
+  function mapShown() {
+    document.dispatchEvent(new CustomEvent('sulat:mapshown'));
+  }
+
+  function toggleFullScreen() {
+    var app = $('app');
+    if (app.dataset.full) delete app.dataset.full;
+    else app.dataset.full = 'on';
+    // the canvas is sized in pixels, so it has to be told
+    setTimeout(function () {
+      if (S.map) { S.map.resize(); S.map.draw(); }
+      mapShown();
+    }, 30);
   }
 
   function closeMenus() {
@@ -4447,6 +4512,8 @@ function toggleImgFree() {
         closeMenus();
         $('lightbox').hidden = true;
         if (S.map && !$('mapEditor').hidden && S.map.linkMode) S.map.setLinkMode(false);
+        // full screen hides the way back, so Escape has to be a way out
+        else if ($('app').dataset.full) toggleFullScreen();
         return;
       }
       if (mod && e.key.toLowerCase() === 'l') {
@@ -4501,6 +4568,7 @@ function toggleImgFree() {
       };
     }
 
+    bindMapSize();
     bindImgResize();
     bindImgDrag();
     bindPaneResize();
