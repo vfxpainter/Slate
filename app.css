@@ -1620,15 +1620,35 @@ select option {
    Two primary actions, the automatic backup set apart, everything else folded
    into a disclosure so the panel opens small. */
 .auto-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .5rem;                 /* one rule for the rhythm, no margins to fight */
   border: 1px solid var(--line);
   border-radius: var(--r);
-  padding: .7rem .8rem;
+  padding: .75rem .85rem;
   margin: .9rem 0;
   background: var(--pane-2);
 }
 .auto-box .check { margin: 0; font-weight: 600; }
-.auto-box .sub.tight { margin: .35rem 0 .55rem; }
-.auto-box .ghost-btn { padding: .3rem .6rem; }
+
+/* Its own class rather than .sub.tight: that one carries a -.5rem top margin
+   for sitting under a field label, and at higher specificity than anything
+   scoped here -- so reusing it pulled this line up into the checkbox. */
+.auto-box .auto-note {
+  margin: 0;
+  font-size: .8rem;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+.auto-box .ghost-btn {
+  padding: .35rem .65rem;
+  border-color: var(--line);   /* .ghost-btn is transparent until hover, which
+                                  left this looking like stray text */
+  background: var(--pane);
+  white-space: nowrap;
+}
+.auto-box .ghost-btn:hover { border-color: var(--ink-3); background: var(--sel); }
 
 .more-box { margin-bottom: .6rem; }
 .more-box > summary {

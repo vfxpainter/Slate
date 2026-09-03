@@ -3138,12 +3138,12 @@ function toggleImgFree() {
           '<div class="auto-box">' +
           '<label class="check"><input type="checkbox" id="autoBk"' +
           (S.autoBackup ? ' checked' : '') + '> Back up automatically</label>' +
-          '<p class="sub tight" id="autoLine"></p>' +
+          '<p class="auto-note" id="autoLine"></p>' +
           (Exporter.hasFilePicker()
             ? '<button class="ghost-btn" data-x="link">' +
               (Exporter.linkedName() ? 'Use Downloads instead' : 'Choose a file to keep updated') +
               '</button>'
-            : '<p class="sub tight">This browser cannot write to a file you choose, ' +
+            : '<p class="auto-note">This browser cannot write to a file you choose, ' +
               'so automatic backups land in your Downloads folder.</p>') +
           '</div>' +
 
