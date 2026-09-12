@@ -1546,6 +1546,20 @@ function paintImgDrag() {
   }
 }
 
+/* Abandon a drag without committing it -- used when a second finger lands and
+   the gesture turns out to be a pinch, which belongs to the browser. */
+function cancelImgDrag() {
+  var d = imgDrag;
+  if (!d) return;
+  imgDrag = null;
+  if (d.frame) cancelAnimationFrame(d.frame);
+  document.body.classList.remove('img-dragging');
+  d.img.classList.remove('ni-drag');
+  d.img.style.transform = d.free
+    ? 'translate3d(' + d.baseX + 'px,' + d.baseY + 'px,0)' : '';
+  if (!d.free) { delete d.img.dataset.tx; delete d.img.dataset.ty; }
+}
+
 function endImgDrag() {
   var d = imgDrag;
   imgDrag = null;
@@ -1571,7 +1585,14 @@ function endImgDrag() {
 function bindImgDrag() {
   var rich = $('noteRich');
 
+  /* How many fingers are on the editor. Two is a pinch, and a pinch belongs to
+     the browser -- claiming it is why zooming on the phone dragged the picture
+     about instead of zooming the page. */
+  var livePointers = 0;
+
   rich.addEventListener('pointerdown', function (e) {
+    livePointers++;
+    if (livePointers > 1) { cancelImgDrag(); return; }    // a pinch is starting
     var img = e.target && e.target.closest ? e.target.closest('img.ni') : null;
     if (!img || e.button !== 0) return;
     e.preventDefault();          // no native drag, no text selection
@@ -1580,11 +1601,14 @@ function bindImgDrag() {
   });
 
   rich.addEventListener('pointermove', function (e) {
+    if (livePointers > 1) { cancelImgDrag(); return; }
     if (imgDrag) { e.preventDefault(); imgDragMove(e); }
   });
 
-  rich.addEventListener('pointerup', endImgDrag);
-  rich.addEventListener('pointercancel', endImgDrag);
+  function releasePointer() { livePointers = Math.max(0, livePointers - 1); }
+
+  rich.addEventListener('pointerup', function (e) { releasePointer(); endImgDrag(e); });
+  rich.addEventListener('pointercancel', function (e) { releasePointer(); endImgDrag(e); });
 
   // the browser's own drag would still fire on an image; refuse it outright
   rich.addEventListener('dragstart', function (e) {
@@ -4430,6 +4454,38 @@ function toggleImgFree() {
     }, 30);
   }
 
+  /* ---------- zooming what you are reading ----------
+     A mindmap already zooms its canvas. Notes and lists had no equivalent: the
+     only way to make the words bigger was to open a settings dialog. This is
+     the same gesture people use everywhere else -- Ctrl with the wheel, or
+     Ctrl and plus or minus -- and it moves the one number that sets the size
+     of note text, list rows and mindmap labels alike.
+
+     Touch is deliberately not handled here: a pinch is the browser's own page
+     zoom and works already, and taking it over would mean fighting it. */
+  function zoomText(step) {
+    var next = Math.min(SIZE_MAX, Math.max(SIZE_MIN, (S.font.size || SIZE_DEFAULT) + step));
+    if (next === S.font.size) {
+      toast(step > 0 ? 'Already the largest text size' : 'Already the smallest text size');
+      return;
+    }
+    S.font.size = next;
+    applyFont();
+    toast('Text size ' + next + 'px');
+  }
+
+  function bindTextZoom() {
+    var scroller = $('editorScroll');
+    if (!scroller) return;
+
+    scroller.addEventListener('wheel', function (e) {
+      if (!(e.ctrlKey || e.metaKey)) return;   // plain scrolling is left alone
+      if (S.note && S.note.type === 'mindmap') return;  // the canvas zooms itself
+      e.preventDefault();                      // or the browser zooms the page
+      zoomText(e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
+  }
+
   function closeMenus() {
     $('newMenu').hidden = true;
     $('noteMenu').hidden = true;
@@ -4923,6 +4979,15 @@ function toggleImgFree() {
         });
         return;
       }
+      if (mod && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_' ||
+                  e.key === '0')) {
+        if (S.note && S.note.type !== 'mindmap' && !typing) {
+          e.preventDefault();
+          if (e.key === '0') { S.font.size = SIZE_DEFAULT; applyFont(); toast('Text size reset'); }
+          else zoomText((e.key === '-' || e.key === '_') ? -1 : 1);
+          return;
+        }
+      }
       if (mod && e.key.toLowerCase() === 'd') {
         if (S.note && S.note.type === 'mindmap' && !typing) {
           e.preventDefault();          // the browser would bookmark the page
@@ -4983,6 +5048,7 @@ function toggleImgFree() {
     }
 
     bindMapSize();
+    bindTextZoom();
     bindImgResize();
     bindImgDrag();
     bindPaneResize();

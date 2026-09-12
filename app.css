@@ -1579,7 +1579,9 @@ body.img-resizing { cursor: nwse-resize; user-select: none; }
 }
 body.img-dragging { user-select: none; cursor: grabbing; }
 body.img-dragging .note-rich { cursor: grabbing; }
-.note-rich img.ni { touch-action: none; }
+/* pinch-zoom stays with the browser; everything else (a one-finger drag to
+   move the picture) comes to us */
+.note-rich img.ni { touch-action: pinch-zoom; }
 
 /* Belt and braces for the dropdown list itself: some platforms ignore the
    inherited colour on the popup, so state it. */
