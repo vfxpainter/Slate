@@ -596,12 +596,20 @@
 
   function hasFilePicker() { return typeof global.showSaveFilePicker === 'function'; }
 
+  /* No date in the suggested name.
+
+     A one-off export is a snapshot, so stamping the moment into its filename
+     is exactly right -- each one is a separate thing you may want to keep. A
+     linked file is the opposite: it is written over again and again, so a date
+     baked into its name is wrong from the second write onward, and says 3
+     September on a file whose contents are from today. The filesystem already
+     records when it was last written, and the dialog shows it too. */
   function linkBackupFile(suggested) {
     if (!hasFilePicker()) {
       return Promise.reject(new Error('This browser cannot link a file.'));
     }
     return global.showSaveFilePicker({
-      suggestedName: suggested || ('sulat-backup-' + stamp() + '.json.gz'),
+      suggestedName: suggested || 'sulat-backup.json.gz',
       types: [{ description: 'Sulat backup', accept: { 'application/json': ['.json', '.gz', '.sulat'] } }]
     }).then(function (handle) { _linked = handle; return handle.name; });
   }
@@ -625,7 +633,19 @@
      a note whose picture is missing is only half a note. The cost is real, so
      only a handful are kept and the oldest are dropped once they add up. */
 
+  /* How many snapshots to hold on to. A month by default, but it is the one
+     number where taste differs -- some people want a long tail, some want the
+     space back -- so it is settable rather than baked in. The byte budget
+     below still applies whatever this says. */
   var KEEP_SNAPSHOTS = 30;                  // a month: they are text-sized now
+
+  function setSnapshotLimit(n) {
+    n = parseInt(n, 10);
+    if (n > 0 && n <= 365) KEEP_SNAPSHOTS = n;
+    return KEEP_SNAPSHOTS;
+  }
+
+  function snapshotLimit() { return KEEP_SNAPSHOTS; }
   var SNAPSHOT_BUDGET = 25 * 1024 * 1024;   // and still capped, just in case
 
   function today() {
@@ -635,7 +655,13 @@
 
   function listSnapshots() {
     return DB.all('backups').then(function (rows) {
-      return rows.sort(function (a, b) { return b.id < a.id ? -1 : 1; });
+      // by the moment it was taken: ids are dates for the daily ones and
+      // something else entirely for a pre-import one, so the id is no longer a
+      // reliable thing to sort on
+      return rows.sort(function (a, b) {
+        var d = (b.takenAt || 0) - (a.takenAt || 0);
+        return d || (b.id < a.id ? -1 : 1);
+      });
     });
   }
 
@@ -650,6 +676,33 @@
       });
       return Promise.all(doomed.map(function (r) { return DB.del('backups', r.id); }))
         .then(function () { return { kept: keep.length, dropped: doomed.length }; });
+    });
+  }
+
+  /* A restore point taken right now, whatever else is in the store.
+
+     Importing merges rather than overwrites, so it cannot wipe a library --
+     but a note edited on two devices does resolve to one of them, and that
+     resolution is not undoable: import clears the undo history, because the
+     alternative is holding a whole second library in memory. So the moment
+     before an import is exactly when a way back is worth having. */
+  function snapshotNow(reason) {
+    return DB.all('notes').then(function (notes) {
+      if (!notes.length) return { skipped: true, empty: true };
+      return buildBundle(null, { inlineImages: false }).then(function (bundle) {
+        var json = JSON.stringify(bundle);
+        var id = (reason || 'manual') + '-' + stamp();
+        return DB.put('backups', {
+          id: id,
+          takenAt: Date.now(),
+          reason: reason || 'manual',
+          bytes: json.length,
+          counts: bundle.counts,
+          json: json
+        }).then(pruneSnapshots).then(function () {
+          return { id: id, bytes: json.length, counts: bundle.counts };
+        });
+      });
     });
   }
 
@@ -911,6 +964,10 @@
     exportBundle: exportBundle,
     autoBackup: autoBackup,
     listSnapshots: listSnapshots,
+    setSnapshotLimit: setSnapshotLimit,
+    snapshotLimit: snapshotLimit,
+    pruneSnapshots: pruneSnapshots,
+    snapshotNow: snapshotNow,
     snapshotImageIds: snapshotImageIds,
     snapshotBlob: snapshotBlob,
     importBundle: importBundle,

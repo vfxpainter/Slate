@@ -185,6 +185,9 @@
             <button class="ghost-btn" data-act="map-link" id="linkBtn">Link <kbd>Ctrl+L</kbd></button>
             <button class="ghost-btn" data-act="map-image">&#128247; Image</button>
             <button class="ghost-btn" data-act="map-image-remove" hidden>Remove image</button>
+            <button class="ghost-btn" data-act="map-copy">Copy <kbd>Ctrl+C</kbd></button>
+            <button class="ghost-btn" data-act="map-paste">Paste <kbd>Ctrl+V</kbd></button>
+            <button class="ghost-btn" data-act="map-duplicate">Duplicate <kbd>Ctrl+D</kbd></button>
             <button class="ghost-btn" data-act="map-unlink">Unlink</button>
             <button class="ghost-btn" data-act="map-del">Delete <kbd>Del</kbd></button>
             <button class="ghost-btn" data-act="map-zoom-out">&#8722;</button>
@@ -214,6 +217,12 @@
               <button class="chip" data-act="map-font-reset" title="Back to the app text size">Reset</button>
             </div>
             <div class="style-group">
+              <span class="style-label">Spacing</span>
+              <button class="chip" data-act="map-space-less" title="Closer together">&#8722;</button>
+              <span class="chip-val" id="mapSpaceVal">52</span>
+              <button class="chip" data-act="map-space-more" title="Further apart">&#43;</button>
+            </div>
+            <div class="style-group">
               <span class="style-label">Lines</span>
               <select id="mapEdgeType" title="Line style — applies to the selected link, or to all"></select>
               <button class="chip" data-act="map-line-thinner" title="Thinner">&#8722;</button>
@@ -237,7 +246,7 @@
 <dialog id="dlg" class="dlg"><div class="dlg-inner" id="dlgInner"></div></dialog>
 <div id="toast" class="toast" hidden></div>
 <input type="file" id="filePick" accept="image/*" multiple hidden>
-<input type="file" id="bundlePick" accept="application/json,application/gzip,.json,.gz,.sulat,.slate" hidden>
+<input type="file" id="bundlePick" accept=".gz,.json,.sulat" hidden>
 <div id="printRoot" class="print-root"></div>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt=""></div>
 

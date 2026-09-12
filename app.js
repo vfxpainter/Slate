@@ -32,7 +32,13 @@
     exportDates: false,   // folder + date line in exports; off by default
     sortBy: 'edited',     // edited | oldest | created | az | za | type
     autoCaps: true,       // capitalise the start of a sentence as you type
-    autoBackup: false,    // write a backup on its own after you stop editing
+    leading: 1.65,        // line spacing for everything you write in
+    keepPasteFormat: false,  // paste carries styling and lists only if asked
+    autoBackup: false,
+    autoGap: '1h',        // one of AUTO_GAPS
+    autoKeep: 30,         // how many snapshots to hold on to
+    autoEncrypt: false,   // automatic backups carry the same password
+    backupPassword: '',   // this session only; never written to disk
     lastAutoBackup: 0,
     paneW: { nav: 0, list: 0 },   // 0 = let the stylesheet decide
     imgURL: {},           // imageId -> object URL
@@ -146,12 +152,15 @@
     var root = document.documentElement;
     root.style.setProperty('--content-font', fontStack());
     root.style.setProperty('--content-size', S.font.size + 'px');
+    root.style.setProperty('--content-leading', String(S.leading));
     try {
       localStorage.setItem('slate-font', JSON.stringify(S.font));
       localStorage.setItem('slate-dateformat', S.dateFormat);
       localStorage.setItem('slate-exportmeta', S.exportDates ? '1' : '0');
       localStorage.setItem('slate-sortby', S.sortBy);
       localStorage.setItem('slate-autocaps', S.autoCaps ? '1' : '0');
+      localStorage.setItem('slate-leading', String(S.leading));
+      localStorage.setItem('slate-pastefmt', S.keepPasteFormat ? '1' : '0');
     } catch (e) { /* private mode */ }
     if (S.map) S.map.setFont(fontStack(), S.font.size);
     // the rich editor grows on its own; nothing to resize
@@ -187,8 +196,18 @@
     var ab = localStorage.getItem('sulat-autobackup');
     if (ab !== null) S.autoBackup = ab === '1';
     S.lastAutoBackup = parseInt(localStorage.getItem('sulat-lastautobackup'), 10) || 0;
+    var ag = localStorage.getItem('sulat-autogap');
+    if (ag) S.autoGap = ag;
+    var ak = parseInt(localStorage.getItem('sulat-autokeep'), 10);
+    if (ak > 0) S.autoKeep = ak;
+    if (window.Exporter) Exporter.setSnapshotLimit(S.autoKeep);
+    S.autoEncrypt = localStorage.getItem('sulat-autoencrypt') === '1';
     var ac = localStorage.getItem('slate-autocaps');
     if (ac !== null) S.autoCaps = ac !== '0';
+    var ld = parseFloat(localStorage.getItem('slate-leading'));
+    if (ld >= 1.1 && ld <= 2.6) S.leading = ld;
+    var pf = localStorage.getItem('slate-pastefmt');
+    if (pf !== null) S.keepPasteFormat = pf === '1';
     try {
       var pw = JSON.parse(localStorage.getItem('slate-panew') || 'null');
       if (pw && typeof pw.nav === 'number') S.paneW = pw;
@@ -619,6 +638,7 @@
   }
 
   function renderList() {
+    if (!S.note) setTimeout(renderFolderOverview, 0);
     $('listTitle').textContent =
       S.q ? 'Results for "' + S.q + '"'
         : S.view === 'all' ? 'All notes'
@@ -1098,6 +1118,50 @@
 
     renderList();
     renderUndoButtons();
+  }
+
+  /* With no note open, the editor used to say only "Pick a note". When a
+     folder is selected there is something better to show: what is in it. It is
+     a summary, not an editor -- clicking a line opens the real note. */
+  function renderFolderOverview() {
+    var box = $('emptyState');
+    if (!box) return;
+    var f = folderById(S.view);
+    if (!f) {
+      box.innerHTML = '<div class="empty-mark">▢</div>' +
+                      '<p>Pick a note, or start a new one.</p>';
+      box.classList.remove('folder-view');
+      return;
+    }
+
+    var inside = liveNotes().filter(function (n) { return n.folderId === f.id; })
+      .sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+    var subs = S.folders.filter(function (x) { return x.parentId === f.id; });
+
+    var html = '<div class="fv-head"><h2>' + esc(f.name) + '</h2>' +
+      '<p class="sub">' + plural(inside.length, 'note') +
+      (subs.length ? ' · ' + plural(subs.length, 'subfolder') : '') + '</p></div>';
+
+    if (subs.length) {
+      html += '<div class="fv-subs">' + subs.map(function (x) {
+        return '<button class="fv-sub" data-view="' + esc(x.id) + '"' +
+          (x.color ? ' data-fcolor="' + esc(x.color) + '"' : '') + '>' +
+          '▢ ' + esc(x.name) + ' <span class="n">' + countIn(x.id) + '</span></button>';
+      }).join('') + '</div>';
+    }
+
+    html += inside.length
+      ? '<ul class="fv-list">' + inside.map(function (n) {
+          return '<li><button data-note-id="' + esc(n.id) + '">' +
+            '<span class="card-kind k-' + esc(n.type) + '">' +
+            (KIND[n.type] || KIND.text) + '</span>' +
+            '<span class="fv-title">' + esc(displayTitle(n)) + '</span>' +
+            '<span class="fv-when">' + esc(fmtDate(n.updatedAt)) + '</span></button></li>';
+        }).join('') + '</ul>'
+      : '<p class="sub">Nothing filed here yet.</p>';
+
+    box.innerHTML = html;
+    box.classList.add('folder-view');
   }
 
   function showEmpty() {
@@ -2322,6 +2386,14 @@ function toggleImgFree() {
       'Shift+drag a node moves its children too · scroll or pinch to zoom';
   }
 
+  function applyMapSpacing() {
+    if (!S.map) return;
+    var y = parseInt(localStorage.getItem('sulat-mapspacing'), 10);
+    if (y > 0) S.map.setSpacing(0, y);
+    var out = $('mapSpaceVal');
+    if (out) out.textContent = S.map.gapY;
+  }
+
   function mountMap() {
     var canvas = $('mapCanvas');
     if (!S.map) {
@@ -2382,6 +2454,7 @@ function toggleImgFree() {
     S.map.setSelectMode(false);
     S.map.setData(S.note.map || { nodes: [], edges: [] });
     S.map.resize();
+    applyMapSpacing();
     $('mapHint').textContent = mapHintText();
     renderSwatches();
     renderShapeSwatches();
@@ -2541,6 +2614,56 @@ function toggleImgFree() {
     ).join('');
   }
 
+  /* Every folder inside this one, however deep. A folder cannot be moved into
+     its own descendant -- that would cut the branch off the tree and leave the
+     notes in it unreachable -- so those are the options to leave out. */
+  function folderSubtree(id) {
+    var out = [id], added = true;
+    while (added) {
+      added = false;
+      S.folders.forEach(function (f) {
+        if (f.parentId && out.indexOf(f.parentId) > -1 && out.indexOf(f.id) === -1) {
+          out.push(f.id);
+          added = true;
+        }
+      });
+    }
+    return out;
+  }
+
+  function moveFolderDialog(id) {
+    var f = folderById(id);
+    if (!f) return;
+    var banned = folderSubtree(id);
+    var choices = S.folders.filter(function (x) { return banned.indexOf(x.id) === -1; });
+
+    showDlg(
+      '<h3>Move “' + esc(f.name) + '”</h3>' +
+      '<p class="sub">Pick the folder it should sit inside. Everything in it moves too.</p>' +
+      '<select id="mvf"><option value="">Top level</option>' +
+      choices.map(function (x) {
+        return '<option value="' + x.id + '"' + (x.id === f.parentId ? ' selected' : '') +
+          '>' + esc(folderPath(x.id)) + '</option>';
+      }).join('') + '</select>' +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Cancel</button>' +
+      '<button class="btn solid" data-x="k">Move</button></div>',
+      function (root) {
+        root.querySelector('[data-x="c"]').onclick = closeDlg;
+        root.querySelector('[data-x="k"]').onclick = function () {
+          var dest = root.querySelector('#mvf').value || null;
+          closeDlg();
+          if (dest === f.parentId) return;
+          act('Move folder', [{ store: 'folders', id: id }], function () {
+            f.parentId = dest;
+          }).then(function () {
+            renderTree(); renderList(); renderUndoButtons();
+            toast('Moved to ' + (dest ? folderPath(dest) : 'the top level'));
+          });
+        };
+      }
+    );
+  }
+
   function moveDialog(ids, label) {
     var targets = ids || (S.note ? [S.note.id] : []);
     if (!targets.length) return;
@@ -2603,6 +2726,8 @@ function toggleImgFree() {
       '<div class="opt-grid">' +
       '<button class="opt" data-x="rename"><b>Rename</b><span>Change the folder name</span></button>' +
       '<button class="opt" data-x="sub"><b>New subfolder</b><span>Nest one inside</span></button>' +
+      '<button class="opt" data-x="move"><b>Move to folder…</b>' +
+      '<span>Nest this folder inside another</span></button>' +
       '<button class="opt" data-x="export"><b>Export folder</b><span>All notes inside, any format</span></button>' +
       '<button class="opt" data-x="del"><b>Delete folder</b><span>Notes move to Unfiled</span></button>' +
       '</div>' +
@@ -2628,6 +2753,10 @@ function toggleImgFree() {
             });
           };
         });
+        root.querySelector('[data-x="move"]').onclick = function () {
+          closeDlg();
+          moveFolderDialog(id);
+        };
         root.querySelector('[data-x="rename"]').onclick = function () {
           closeDlg();
           promptDialog('Rename folder', f.name, function (v) {
@@ -2698,6 +2827,20 @@ function toggleImgFree() {
       '" step="1" value="' + S.font.size + '">' +
       '<div class="font-preview" id="fp">Sphinx of black quartz, judge my vow — 0123456789</div>' +
 
+      '<label class="fld" for="ls">Line spacing \u2014 <b id="lsv">' +
+      S.leading.toFixed(2) + '</b></label>' +
+      '<input type="range" id="ls" min="1.1" max="2.6" step="0.05" value="' +
+      S.leading + '">' +
+      '<p class="sub tight">How far apart the lines sit in notes, lists and ' +
+      'mindmap text.</p>' +
+
+      '<label class="check"><input type="checkbox" id="pf"' +
+      (S.keepPasteFormat ? ' checked' : '') +
+      '> Keep formatting when pasting</label>' +
+      '<p class="sub tight">Off means pasted text arrives plain \u2014 no ' +
+      'inherited headings or numbered lists that then carry on into whatever ' +
+      'you type next.</p>' +
+
       '<label class="fld" for="uf">Interface typeface</label>' +
       '<select id="uf">' + FONT_KEYS.map(function (k) {
         return '<option value="' + k + '"' + (k === S.uiFont ? ' selected' : '') + '>' +
@@ -2733,6 +2876,8 @@ function toggleImgFree() {
         var dfmt = root.querySelector('#dfmt'), dp = root.querySelector('#dp');
         var xd = root.querySelector('#xd');
         var ac = root.querySelector('#ac');
+        var ls = root.querySelector('#ls'), lsv = root.querySelector('#lsv');
+        var pf = root.querySelector('#pf');
         var us = root.querySelector('#us'), usv = root.querySelector('#usv');
         var uf = root.querySelector('#uf');
         function live() {
@@ -2740,6 +2885,9 @@ function toggleImgFree() {
           S.dateFormat = dfmt.value;
           S.exportDates = xd.checked;
           S.autoCaps = ac.checked;
+          S.leading = parseFloat(ls.value) || 1.65;
+          S.keepPasteFormat = pf.checked;
+          lsv.textContent = S.leading.toFixed(2);
           S.uiScale = parseInt(us.value, 10);
           S.uiFont = uf.value;
           usv.textContent = S.uiScale;
@@ -2759,6 +2907,8 @@ function toggleImgFree() {
         dfmt.onchange = live;
         xd.onchange = live;
         ac.onchange = live;
+        ls.oninput = live;
+        pf.onchange = live;
         us.oninput = live;
         uf.onchange = live;
         root.querySelector('[data-x="reset"]').onclick = function () {
@@ -2767,6 +2917,8 @@ function toggleImgFree() {
           dfmt.value = 'relative';
           xd.checked = false;
           ac.checked = true;
+          ls.value = 1.65;
+          pf.checked = false;
           us.value = 100;
           uf.value = 'system';
           live();
@@ -2947,6 +3099,44 @@ function toggleImgFree() {
   /* Encryption is offered, not imposed. A backup you cannot open is worse
      than no backup, and forgetting this password costs only this one file --
      your notes are still on the device in the clear. */
+  /* Asked for after a reload, when automatic backups are protected but the
+     password is only ever held in memory. Nothing is exported here -- it just
+     puts the key back so the next scheduled backup can run. */
+  function askBackupPassword() {
+    showDlg(
+      '<h3>Unlock automatic backups</h3>' +
+      '<p class="sub">Your backups are protected. The password is never stored, ' +
+      'so it is needed again each time the app starts.</p>' +
+      '<label class="fld" for="ap">Backup password</label>' +
+      '<input type="password" id="ap" autocomplete="current-password">' +
+      '<div class="dlg-actions">' +
+      '<button class="btn" data-x="off">Stop protecting them</button>' +
+      '<button class="btn solid" data-x="k">Unlock</button></div>',
+      function (root) {
+        var ap = root.querySelector('#ap');
+        root.querySelector('[data-x="k"]').onclick = function () {
+          if (!ap.value) return;
+          S.backupPassword = ap.value;
+          closeDlg();
+          toast('Automatic backups unlocked');
+          scheduleAutoBackup();
+        };
+        root.querySelector('[data-x="off"]').onclick = function () {
+          S.autoEncrypt = false;
+          S.backupPassword = '';
+          try { localStorage.setItem('sulat-autoencrypt', '0'); } catch (e) { /* ignore */ }
+          closeDlg();
+          toast('Automatic backups will no longer be protected');
+          scheduleAutoBackup();
+        };
+        ap.onkeydown = function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); root.querySelector('[data-x="k"]').click(); }
+        };
+        setTimeout(function () { ap.focus(); }, 30);
+      }
+    );
+  }
+
   function backupDialog() {
     var linked = Exporter.linkedName();
     showDlg(
@@ -2985,6 +3175,13 @@ function toggleImgFree() {
             if (pass !== bp2.value) { err.textContent = 'Those two do not match.'; err.hidden = false; return; }
           }
           closeDlg();
+          /* Hold it for this session so automatic backups stay protected too.
+             Deliberately not stored: a password in localStorage would sit in
+             plain text beside the very notes it exists to protect. */
+          S.backupPassword = pass;
+          S.autoEncrypt = !!pass;
+          try { localStorage.setItem('sulat-autoencrypt', S.autoEncrypt ? '1' : '0'); }
+          catch (e) { /* private mode */ }
           Exporter.exportBundle(null, null, { password: pass, toLinked: true })
             .then(function (c) {
               var size = c.bytes ? ' · ' + (c.bytes / 1048576).toFixed(1) + ' MB' : '';
@@ -3001,7 +3198,14 @@ function toggleImgFree() {
      only appears once the file has said it is encrypted, so a plain import is
      never interrupted by one. */
   function runImport(file, password) {
-    Exporter.importBundle(file, { password: password }).then(function (c) {
+    /* Snapshot first. Import cannot be undone -- the undo history is cleared
+       afterwards -- so this is the only way back if the merge resolves a note
+       in a direction you did not want. */
+    Exporter.snapshotNow('before-import').catch(function () {
+      return null;                 // a failed snapshot must not block the import
+    }).then(function () {
+      return Exporter.importBundle(file, { password: password });
+    }).then(function (c) {
       return load().then(function () {
         History.clear();
         S.note = null;
@@ -3010,7 +3214,9 @@ function toggleImgFree() {
         if (c.added) bits.push(c.added + ' new');
         if (c.updated) bits.push(c.updated + ' updated');
         if (c.kept) bits.push(c.kept + ' already newer here');
-        toast(bits.length ? 'Merged: ' + bits.join(', ') : 'Nothing to merge — already up to date');
+        toast((bits.length ? 'Merged: ' + bits.join(', ')
+                           : 'Nothing to merge — already up to date') +
+              ' · restore point saved');
       });
     }).catch(function (e) {
       if (e && (e.needsPassword || /wrong password/i.test(e.message))) {
@@ -3084,7 +3290,20 @@ function toggleImgFree() {
      It writes to the file you linked when there is one, and falls back to a
      normal download otherwise -- which is noisier, hence off until asked for. */
   var AUTO_QUIET_MS = 60 * 1000;          // wait for the typing to stop
-  var AUTO_MIN_GAP_MS = 60 * 60 * 1000;   // and never more often than hourly
+  /* How long to leave between automatic backups. Hourly was the only setting
+     and it was not written down anywhere, so a backup could be an hour behind
+     with nothing on screen to say so. */
+  var AUTO_GAPS = [
+    { id: '1m',  label: 'Every minute',    ms: 60 * 1000 },
+    { id: '5m',  label: 'Every 5 minutes', ms: 5 * 60 * 1000 },
+    { id: '15m', label: 'Every 15 minutes', ms: 15 * 60 * 1000 },
+    { id: '1h',  label: 'Hourly',          ms: 60 * 60 * 1000 },
+    { id: '1d',  label: 'Once a day',      ms: 24 * 60 * 60 * 1000 }
+  ];
+  function autoGapMs() {
+    var g = AUTO_GAPS.filter(function (x) { return x.id === S.autoGap; })[0];
+    return (g || AUTO_GAPS[3]).ms;
+  }
   var autoTimer = null;
 
   function scheduleAutoBackup() {
@@ -3093,15 +3312,38 @@ function toggleImgFree() {
     autoTimer = setTimeout(runAutoBackup, AUTO_QUIET_MS);
   }
 
+  var autoNagged = false;
+
   function runAutoBackup() {
     if (!S.autoBackup) return;
     var now = Date.now();
-    if (S.lastAutoBackup && now - S.lastAutoBackup < AUTO_MIN_GAP_MS) {
+    var gap = autoGapMs();
+    if (S.lastAutoBackup && now - S.lastAutoBackup < gap) {
       // too soon: come back when the gap has passed
-      autoTimer = setTimeout(runAutoBackup, AUTO_MIN_GAP_MS - (now - S.lastAutoBackup));
+      autoTimer = setTimeout(runAutoBackup, gap - (now - S.lastAutoBackup));
       return;
     }
-    Exporter.exportBundle(null, null, { toLinked: true, quiet: true })
+
+    /* Never quietly downgrade. If the last backup you made by hand was
+       protected, an automatic one has to be protected too -- otherwise it
+       overwrites your encrypted file with a plain one a minute later, which is
+       worse than not backing up at all. The password is held for this session
+       only and never written to disk, so after a reload it has to be given
+       again before automatic backups resume. */
+    if (S.autoEncrypt && !S.backupPassword) {
+      console.warn('Sulat: automatic backup held - encrypted backups need the ' +
+                   'password again after a reload.');
+      if (!autoNagged) {
+        autoNagged = true;
+        toast('Automatic backup paused: open Backup & transfer to unlock it.');
+      }
+      return;
+    }
+
+    Exporter.exportBundle(null, null, {
+      toLinked: true, quiet: true,
+      password: S.autoEncrypt ? S.backupPassword : ''
+    })
       .then(function (c) {
         S.lastAutoBackup = Date.now();
         try { localStorage.setItem('sulat-lastautobackup', String(S.lastAutoBackup)); }
@@ -3146,10 +3388,30 @@ function toggleImgFree() {
           '<label class="check"><input type="checkbox" id="autoBk"' +
           (S.autoBackup ? ' checked' : '') + '> Back up automatically</label>' +
           '<p class="auto-note" id="autoLine"></p>' +
+          '<label class="fld tight" for="autoKeep">How many to keep</label>' +
+          '<select id="autoKeep" class="sort-select wide">' +
+          [7, 14, 30, 60, 120].map(function (n) {
+            return '<option value="' + n + '"' + (n === S.autoKeep ? ' selected' : '') +
+              '>' + n + ' most recent</option>';
+          }).join('') + '</select>' +
+
+          '<label class="fld tight" for="autoGap">How often</label>' +
+          '<select id="autoGap" class="sort-select wide">' + AUTO_GAPS.map(function (g) {
+            return '<option value="' + g.id + '"' + (g.id === S.autoGap ? ' selected' : '') +
+              '>' + esc(g.label) + '</option>';
+          }).join('') + '</select>' +
+          (S.autoEncrypt && !S.backupPassword
+            ? '<p class="auto-note warn-note">Paused — these backups are protected and ' +
+              'the password is needed again after a reload.</p>' +
+              '<button class="ghost-btn" data-x="unlock-auto">Enter the backup password</button>'
+            : '') +
           (Exporter.hasFilePicker()
-            ? '<button class="ghost-btn" data-x="link">' +
-              (Exporter.linkedName() ? 'Use Downloads instead' : 'Choose a file to keep updated') +
-              '</button>'
+            ? (Exporter.linkedName()
+                ? '<div class="auto-actions">' +
+                  '<button class="ghost-btn" data-x="relink">Choose a different file</button>' +
+                  '<button class="ghost-btn" data-x="link">Use Downloads instead</button>' +
+                  '</div>'
+                : '<button class="ghost-btn" data-x="link">Choose a file to keep updated</button>')
             : '<p class="auto-note">This browser cannot write to a file you choose, ' +
               'so automatic backups land in your Downloads folder.</p>') +
           '</div>' +
@@ -3175,6 +3437,32 @@ function toggleImgFree() {
           function (root) {
             root.querySelector('[data-x="c"]').onclick = closeDlg;
 
+            var keepSel = root.querySelector('#autoKeep');
+            if (keepSel) {
+              keepSel.onchange = function () {
+                S.autoKeep = parseInt(keepSel.value, 10) || 30;
+                try { localStorage.setItem('sulat-autokeep', String(S.autoKeep)); }
+                catch (err) { /* private mode */ }
+                Exporter.setSnapshotLimit(S.autoKeep);
+                Exporter.pruneSnapshots().then(function () { describeAuto(); });
+              };
+            }
+            var gapSel = root.querySelector('#autoGap');
+            if (gapSel) {
+              gapSel.onchange = function () {
+                S.autoGap = gapSel.value;
+                try { localStorage.setItem('sulat-autogap', S.autoGap); }
+                catch (err) { /* private mode */ }
+                describeAuto();
+                if (S.autoBackup) scheduleAutoBackup();
+              };
+            }
+
+            var unlockBtn = root.querySelector('[data-x="unlock-auto"]');
+            if (unlockBtn) {
+              unlockBtn.onclick = function () { closeDlg(); askBackupPassword(); };
+            }
+
             var autoBox = root.querySelector('#autoBk');
             var autoLine = root.querySelector('#autoLine');
             function describeAuto() {
@@ -3183,15 +3471,27 @@ function toggleImgFree() {
               autoLine.textContent = !S.autoBackup
                 ? 'Off. Nothing is written unless you export by hand.'
                 : (where
-                    ? 'Overwrites ' + where + ' about a minute after you stop editing.'
-                    : 'Saves to your Downloads folder about a minute after you stop editing.') +
-                  (S.lastAutoBackup ? ' Last: ' + fmtDate(S.lastAutoBackup, { time: true }) + '.' : '');
+                    ? 'Keeps ' + where + ' up to date'
+                    : 'Saves to your Downloads folder') +
+                  ', at most ' + ((AUTO_GAPS.filter(function (g) {
+                    return g.id === S.autoGap;
+                  })[0] || AUTO_GAPS[3]).label.toLowerCase()) + '.' +
+                  (S.autoEncrypt ? ' Protected with your backup password.' : '') +
+                  // the full date, not just a time: a linked file keeps whatever
+                  // name it was given, so the name cannot be trusted to say when
+                  (S.lastAutoBackup
+                    ? ' Last written ' + fmtDate(S.lastAutoBackup, { full: true }) + '.'
+                    : '');
             }
             describeAuto();
             if (autoBox) {
               autoBox.onchange = function () {
                 S.autoBackup = autoBox.checked;
-                try { localStorage.setItem('sulat-autobackup', S.autoBackup ? '1' : '0'); }
+                try {
+                  localStorage.setItem('sulat-autobackup', S.autoBackup ? '1' : '0');
+                  localStorage.setItem('sulat-autogap', S.autoGap);
+                  localStorage.setItem('sulat-autoencrypt', S.autoEncrypt ? '1' : '0');
+                }
                 catch (err) { /* private mode */ }
                 describeAuto();
                 if (S.autoBackup) scheduleAutoBackup();
@@ -3202,6 +3502,18 @@ function toggleImgFree() {
               closeDlg();
               backupDialog();
             };
+            var relinkBtn = root.querySelector('[data-x="relink"]');
+            if (relinkBtn) {
+              relinkBtn.onclick = function () {
+                Exporter.linkBackupFile().then(function (name) {
+                  closeDlg();
+                  toast('Now keeping ' + name + ' up to date');
+                }).catch(function (e) {
+                  if (e && e.name === 'AbortError') return;   // they changed their mind
+                  toast('Could not link a file: ' + e.message);
+                });
+              };
+            }
             var linkBtn = root.querySelector('[data-x="link"]');
             if (linkBtn) {
               linkBtn.onclick = function () {
@@ -3764,6 +4076,34 @@ function toggleImgFree() {
       $('styleBtn').classList.toggle('on', !hidden);
       focusMap();
     },
+    'map-copy': function () {
+      if (!S.map) return;
+      var n = S.map.copySelection();
+      toast(n ? 'Copied ' + plural(n, 'node') : 'Select some nodes first.');
+    },
+    /* Copy and paste in one move. Duplicating is what people actually reach
+       for on a selected branch, and making them do it in two steps -- with a
+       clipboard they cannot see -- is friction for no gain. */
+    'map-duplicate': function () {
+      if (!S.map) return;
+      var n = S.map.copySelection();
+      if (!n) { toast('Select some nodes first.'); return; }
+      editNote('Duplicate nodes', function () {
+        S.map.pasteClipboard();
+      }).then(function () {
+        toast('Duplicated ' + plural(n, 'node'));
+      });
+    },
+    'map-paste': function () {
+      if (!S.map) return;
+      editNote('Paste nodes', function () {
+        var n = S.map.pasteClipboard();
+        if (!n) toast('Nothing copied yet.');
+        else toast('Pasted ' + plural(n, 'node'));
+      });
+    },
+    'map-space-less': function () { nudgeMapSpacing(-8); },
+    'map-space-more': function () { nudgeMapSpacing(8); },
     'map-unlink': function () {
       var n = S.map.unlinkSelected();
       if (!n) toast('Pick a link, or two or more nodes, first.');
@@ -3825,6 +4165,18 @@ function toggleImgFree() {
   function focusMap() {
     var c = $('mapCanvas');
     if (c) c.focus({ preventScroll: true });
+  }
+
+  /* Spacing is remembered for the app, not per map: it is a preference about
+     how you like maps laid out, the same way the font size is. */
+  function nudgeMapSpacing(delta) {
+    if (!S.map) return;
+    var y = Math.max(24, Math.min(200, (S.map.gapY || 52) + delta));
+    S.map.setSpacing(0, y);
+    try { localStorage.setItem('sulat-mapspacing', String(y)); } catch (e) { /* ignore */ }
+    var out = $('mapSpaceVal');
+    if (out) out.textContent = y;
+    toast('New nodes sit ' + y + 'px apart');
   }
 
   function toggleLinkMode() {
@@ -4133,7 +4485,12 @@ function toggleImgFree() {
         S.view = nav.dataset.view;
         S.picked = {};
         delete $('app').dataset.nav;
+        /* Choosing a folder is a browsing move, so put its contents in the
+           viewer rather than leaving whatever note happened to be open. The
+           note is already saved; nothing is lost by closing it. */
+        if (S.note) { flush(); showEmpty(); }
         renderTree(); renderList(); renderSelectBar();
+        renderFolderOverview();
         return;
       }
 
@@ -4414,6 +4771,41 @@ function toggleImgFree() {
       var target = e.target;
       var inRich = target && target.closest && target.closest('#noteRich');
       var html = e.clipboardData.getData && e.clipboardData.getData('text/html');
+
+      /* Plain unless you asked for formatting. Pasting a numbered list used to
+         bring the <ol> with it, and every Enter afterwards produced another
+         numbered item -- formatting nobody asked for, arriving by way of the
+         clipboard and then refusing to stop.
+
+         This has to insert the text itself rather than just stand aside:
+         left to its own devices the browser pastes the text/html flavour, so
+         the list would come straight back. */
+      if (inRich && html && !S.keepPasteFormat && !(e.clipboardData.files || []).length) {
+        e.preventDefault();
+        var plain = e.clipboardData.getData('text/plain') || '';
+        var sel0 = window.getSelection();
+        if (sel0 && sel0.rangeCount && plain) {
+          var r0 = sel0.getRangeAt(0);
+          r0.deleteContents();
+          // keep the line breaks; drop everything else
+          var frag0 = document.createDocumentFragment();
+          var NL = String.fromCharCode(10), CR = String.fromCharCode(13);
+          plain.split(CR + NL).join(NL).split(CR).join(NL)
+               .split(NL).forEach(function (line, i) {
+            if (i) frag0.appendChild(document.createElement('br'));
+            if (line) frag0.appendChild(document.createTextNode(line));
+          });
+          var last0 = frag0.lastChild;
+          r0.insertNode(frag0);
+          if (last0) {
+            r0.setStartAfter(last0); r0.collapse(true);
+            sel0.removeAllRanges(); sel0.addRange(r0);
+          }
+        }
+        saveRich('Paste');
+        return;
+      }
+
       if (inRich && html && !(e.clipboardData.files || []).length) {
         e.preventDefault();
         var box = document.createElement('div');
@@ -4514,6 +4906,28 @@ function toggleImgFree() {
         if (S.map && !$('mapEditor').hidden && S.map.linkMode) S.map.setLinkMode(false);
         // full screen hides the way back, so Escape has to be a way out
         else if ($('app').dataset.full) toggleFullScreen();
+        return;
+      }
+      if (mod && !e.shiftKey && (e.key === 'c' || e.key === 'C') &&
+          S.map && !$('mapEditor').hidden && !typing) {
+        var copied = S.map.copySelection();
+        if (copied) { e.preventDefault(); toast('Copied ' + plural(copied, 'node')); }
+        return;
+      }
+      if (mod && !e.shiftKey && (e.key === 'v' || e.key === 'V') &&
+          S.map && !$('mapEditor').hidden && !typing) {
+        e.preventDefault();
+        editNote('Paste nodes', function () {
+          var n = S.map.pasteClipboard();
+          if (n) toast('Pasted ' + plural(n, 'node'));
+        });
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'd') {
+        if (S.note && S.note.type === 'mindmap' && !typing) {
+          e.preventDefault();          // the browser would bookmark the page
+          ACTIONS['map-duplicate']();
+        }
         return;
       }
       if (mod && e.key.toLowerCase() === 'l') {

@@ -317,8 +317,11 @@ button { cursor: pointer; background: none; border: 0; }
   font-size: 1.55rem;
   font-weight: 620;
   letter-spacing: -.01em;
-  padding: 0 0 .2rem;
-  line-height: 1.25;
+  /* Room for the tops of capitals and for descenders. At 1.25 with no top
+     padding the box was exactly the line box, and `overflow: hidden` shaved
+     the ascenders off -- most visible on a bold face like this one. */
+  padding: .12em 0 .3rem;
+  line-height: 1.32;
   /* wraps and grows instead of scrolling sideways */
   display: block;
   resize: none;
@@ -334,6 +337,7 @@ button { cursor: pointer; background: none; border: 0; }
   color: var(--ink-3);
   letter-spacing: .05em;
   text-transform: uppercase;
+  margin-top: .15rem;
   margin-bottom: 1.1rem;
 }
 
@@ -1805,4 +1809,61 @@ select option {
 @media (max-width: 900px) {
   .undo-pair .icon-btn { width: 42px; height: 40px; }
   .undo-pair .icon-btn svg { width: 19px; height: 19px; }
+}
+
+.auto-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+
+.sort-select.wide { max-width: none; width: 100%; padding: .35rem .5rem; }
+.fld.tight { margin-top: .2rem; margin-bottom: .15rem; }
+.auto-note.warn-note { color: var(--danger); }
+
+/* ---- what is in this folder ----
+   Shown where the empty state used to be, so selecting a folder answers
+   "what is in here" without opening anything. */
+.empty-state.folder-view {
+  display: block;
+  place-content: initial;
+  text-align: left;
+  padding: 2rem 1.6rem 4rem;
+  max-width: 46rem;
+  margin: 0 auto;
+  height: auto;
+  overflow-y: auto;
+}
+.fv-head h2 { font-size: 1.35rem; margin: 0 0 .1rem; }
+.fv-head .sub { margin: 0 0 1.1rem; }
+
+.fv-subs { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.2rem; }
+.fv-sub {
+  border: 1px solid var(--line); border-radius: var(--r);
+  padding: .3rem .6rem; font-size: .85rem; cursor: pointer;
+  background: var(--pane); color: var(--ink-2);
+}
+.fv-sub:hover { border-color: var(--accent); color: var(--ink); }
+.fv-sub .n { color: var(--ink-3); font-size: .78rem; margin-left: .3rem; }
+
+.fv-list { list-style: none; margin: 0; padding: 0; }
+.fv-list li { border-bottom: 1px solid var(--line-soft); }
+.fv-list button {
+  display: flex; align-items: baseline; gap: .6rem; width: 100%;
+  padding: .6rem .2rem; text-align: left; cursor: pointer;
+  background: none; border: 0; color: inherit;
+}
+.fv-list button:hover { background: var(--sel); }
+.fv-title { flex: 1 1 auto; min-width: 0; text-transform: capitalize; }
+.fv-when { flex: 0 0 auto; font-size: .74rem; color: var(--ink-3); }
+
+/* ---- line spacing ----
+   Set once in Text & font and used by everything you write in: prose, list
+   rows and the mindmap's inline editor. Kept as a variable so a single number
+   moves all of them together. */
+.note-rich,
+.list-editor .row .txt,
+.map-inline {
+  line-height: var(--content-leading, 1.65);
+}
+.note-rich p,
+.note-rich li,
+.note-rich div {
+  line-height: inherit;
 }

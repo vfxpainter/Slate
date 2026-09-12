@@ -14,6 +14,13 @@
   function wrapWidthFor(size) { return Math.round(size * 13.5); }
   function lineHeightFor(size) { return Math.round(size * 1.35); }
   var IMG_MAX_W = 160, IMG_MAX_H = 120, IMG_GAP = 7;
+  var MIN_NODE_FS = 7;      // type stops shrinking here; below it is unreadable
+
+  /* How far a new child sits from its parent. The vertical figure was 72 and
+     fixed, which left a lot of air between siblings on anything but a crowded
+     map -- and no way to close it. */
+  var GAP_X_DEFAULT = 120;
+  var GAP_Y_DEFAULT = 52;
   var EDGE_HIT = 9;          // px from a curve that still counts as a click
   var DRAG_SLOP = 4;         // px before a press becomes a drag
 
@@ -128,6 +135,9 @@
     this._hover = null;        // node under the pointer, for its connectors
     this._linking = null;      // { from } while dragging out of a connector
     this._resizing = null;     // { node, w0, sx }
+    this.gapX = GAP_X_DEFAULT;
+    this.gapY = GAP_Y_DEFAULT;
+    this._clip = null;         // nodes copied, waiting to be pasted
     this._imgCache = {};       // imageId -> HTMLImageElement | 'loading' | null
     this._ratio = {};          // imageId -> width/height, kept once known
     this._pointers = new Map();
@@ -375,17 +385,48 @@
 
   // Wraps at whatever font the caller has already set on the context -- layout
   // sets each node's own size first, so this must not overwrite it.
+  /* Wrapping on spaces alone is not enough: a single unbroken run -- a URL, a
+     long identifier, a row of the same letter -- has no space to break at, so
+     it stayed one line and ran straight out of both sides of the node. Anything
+     wider than the box is now cut mid-word, the way a browser's
+     `overflow-wrap: anywhere` would. */
+  Mindmap.prototype._breakWord = function (word, width) {
+    var ctx = this.ctx, out = [], part = '';
+    for (var i = 0; i < word.length; i++) {
+      var probe = part + word[i];
+      if (part && ctx.measureText(probe).width > width) {
+        out.push(part);
+        part = word[i];
+      } else {
+        part = probe;
+      }
+    }
+    if (part) out.push(part);
+    return out;
+  };
+
   Mindmap.prototype._wrapTo = function (text, width) {
     var ctx = this.ctx;
     var words = String(text || '').split(/\s+/).filter(Boolean);
     if (!words.length) return [];
     var lines = [], line = '';
     for (var i = 0; i < words.length; i++) {
-      var probe = line ? line + ' ' + words[i] : words[i];
-      if (ctx.measureText(probe).width > width && line) { lines.push(line); line = words[i]; }
+      var word = words[i];
+
+      // too long to fit on a line of its own, whatever we do with spaces
+      if (ctx.measureText(word).width > width) {
+        if (line) { lines.push(line); line = ''; }
+        var pieces = this._breakWord(word, width);
+        for (var k = 0; k < pieces.length - 1; k++) lines.push(pieces[k]);
+        line = pieces[pieces.length - 1] || '';
+        continue;
+      }
+
+      var probe = line ? line + ' ' + word : word;
+      if (ctx.measureText(probe).width > width && line) { lines.push(line); line = word; }
       else { line = probe; }
     }
-    lines.push(line);
+    if (line) lines.push(line);
     return lines;
   };
 
@@ -433,6 +474,23 @@
       // round shapes need slack, or the text pokes out of the outline
       n.w = n.w0 || Math.round(contentW * shape.padX);
       n.h = n.h0 || Math.round(contentH * shape.padY);
+
+      /* Text has to fit the box too. When a node has been given a size by hand,
+         re-wrap and, if the lines still stand taller than the space inside,
+         step the type down until they fit. Scaling the box scales what is in
+         it, which is what dragging a corner is understood to mean. */
+      if (n.h0 && n.lines.length) {
+        var innerH = n.h0 / shape.padY - PAD_Y * 2 - (n.imgH ? n.imgH + IMG_GAP : 0);
+        var innerW = inner || wrapWidthFor(n._fs);
+        var guard = 0;
+        while (guard++ < 24 && n._fs > MIN_NODE_FS &&
+               n.lines.length * n._lh > innerH) {
+          n._fs = Math.max(MIN_NODE_FS, n._fs - 1);
+          n._lh = lineHeightFor(n._fs);
+          ctx.font = n._fs + 'px ' + this.fontStack;
+          n.lines = this._wrapTo(n.text, innerW);
+        }
+      }
 
       /* A node dragged smaller than its contents used to let the picture spill
          over the outline. Fit the image inside what the node actually is, on
@@ -641,8 +699,8 @@
     var n = {
       id: DB.uid(),
       text: 'Idea',
-      x: p.x + p.w / 2 + 120,
-      y: p.y + (kids ? (kids % 2 ? 1 : -1) * Math.ceil(kids / 2) * 72 : 0),
+      x: p.x + p.w / 2 + this.gapX,
+      y: p.y + (kids ? (kids % 2 ? 1 : -1) * Math.ceil(kids / 2) * this.gapY : 0),
       color: p.color || 'plain',       // children inherit the parent's colour
       image: null,
       noteId: null
@@ -654,6 +712,80 @@
     this.select(n);
     this._changed();
     return n;
+  };
+
+  /* Copying a selection means copying the edges between the chosen nodes as
+     well -- otherwise pasting a branch gives you a heap of loose nodes rather
+     than the shape you picked. Edges to anything outside the selection are
+     deliberately left behind: they point at nodes the copy does not contain. */
+  Mindmap.prototype.copySelection = function () {
+    var picked = this.selection.length ? this.selection : (this.selected ? [this.selected] : []);
+    if (!picked.length) return 0;
+    var ids = {};
+    picked.forEach(function (n) { ids[n.id] = true; });
+
+    this._clip = {
+      nodes: picked.map(function (n) {
+        return {
+          text: n.text, color: n.color, shape: n.shape, image: n.image,
+          fs: n.fs, w0: n.w0, h0: n.h0,
+          dx: n.x - picked[0].x, dy: n.y - picked[0].y
+        };
+      }),
+      edges: this.edges.filter(function (e) { return ids[e.a] && ids[e.b]; })
+        .map(function (e) {
+          return {
+            a: picked.map(function (n) { return n.id; }).indexOf(e.a),
+            b: picked.map(function (n) { return n.id; }).indexOf(e.b),
+            type: e.type, width: e.width
+          };
+        })
+    };
+    return picked.length;
+  };
+
+  /* Pasted onto a node, the copy hangs off it as a child; pasted onto nothing,
+     it lands beside the original. Either way it is a copy: new ids throughout,
+     so editing one does not touch the other. */
+  Mindmap.prototype.pasteClipboard = function (onto) {
+    var clip = this._clip;
+    if (!clip || !clip.nodes.length) return 0;
+    var anchor = onto || this.selected;
+    var baseX = anchor ? anchor.x + anchor.w / 2 + this.gapX : 0;
+    var baseY = anchor ? anchor.y : 0;
+
+    var made = [];
+    for (var i = 0; i < clip.nodes.length; i++) {
+      var c = clip.nodes[i];
+      var n = {
+        id: DB.uid(),
+        text: c.text, color: c.color, shape: c.shape, image: c.image || null,
+        fs: c.fs, w0: c.w0, h0: c.h0,
+        x: baseX + c.dx, y: baseY + c.dy,
+        noteId: null
+      };
+      this.nodes.push(n);
+      made.push(n);
+    }
+
+    clip.edges.forEach(function (e) {
+      if (made[e.a] && made[e.b]) {
+        this.edges.push({ a: made[e.a].id, b: made[e.b].id, type: e.type, width: e.width });
+      }
+    }, this);
+
+    // join the copy to whatever it was pasted onto
+    if (anchor) this.edges.push({ a: anchor.id, b: made[0].id });
+
+    this._layout();
+    this.selectMany(made);
+    this._changed();
+    return made.length;
+  };
+
+  Mindmap.prototype.setSpacing = function (x, y) {
+    if (x) this.gapX = Math.max(60, Math.min(400, x));
+    if (y) this.gapY = Math.max(24, Math.min(200, y));
   };
 
   Mindmap.prototype.addSibling = function () {
@@ -1163,6 +1295,14 @@
       ctx.lineWidth = pending ? 3 : (sel ? 2 : 1);
       ctx.stroke();
 
+      /* Clip to the outline before drawing anything inside it. The wrapping
+         above should already fit, but measurement and the real glyphs can
+         disagree by a pixel or two, and a node that leaks its text is much
+         worse than one that trims a hair off a descender. */
+      ctx.save();
+      this._shapePath(ctx, n);
+      ctx.clip();
+
       ctx.font = n._fs + 'px ' + this.fontStack;
       // centre the block of content inside the shape
       var blockH = n.lines.length * n._lh + (n.imgH ? n.imgH + (n.lines.length ? IMG_GAP : 0) : 0);
@@ -1188,6 +1328,7 @@
       for (var li = 0; li < n.lines.length; li++) {
         ctx.fillText(n.lines[li], n.x, cursorY + li * n._lh + n._lh / 2);
       }
+      ctx.restore();               // end the clip for this node
     }
 
     if (this._marquee) {
