@@ -1579,9 +1579,13 @@ body.img-resizing { cursor: nwse-resize; user-select: none; }
 }
 body.img-dragging { user-select: none; cursor: grabbing; }
 body.img-dragging .note-rich { cursor: grabbing; }
-/* pinch-zoom stays with the browser; everything else (a one-finger drag to
-   move the picture) comes to us */
-.note-rich img.ni { touch-action: pinch-zoom; }
+/* A locked picture claims nothing: scrolling and pinching pass straight
+   through to the browser, which is what a finger on a photo almost always
+   means. Only once images are unlocked does a one-finger drag come to us, and
+   even then a pinch is left alone. */
+.note-rich img.ni { touch-action: auto; cursor: default; }
+body.img-movable .note-rich img.ni { touch-action: pinch-zoom; cursor: grab; }
+body.img-movable .note-rich img.ni-sel { cursor: grab; }
 
 /* Belt and braces for the dropdown list itself: some platforms ignore the
    inherited colour on the popup, so state it. */
@@ -1869,3 +1873,23 @@ select option {
 .note-rich div {
   line-height: inherit;
 }
+
+/* the padlock, and the zoom pair in the header */
+.img-bar button.on { background: var(--accent); color: #fff; }
+.zoom-pair {
+  display: flex; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 9px;
+  overflow: hidden; background: var(--pane);
+}
+.zoom-pair .icon-btn { border-radius: 0; width: 34px; color: var(--ink); }
+.zoom-pair .icon-btn + .icon-btn { border-left: 1px solid var(--line); }
+.zoom-pair .icon-btn svg {
+  width: 17px; height: 17px;
+  fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+.zoom-pair .icon-btn:hover { background: var(--sel); color: var(--accent); }
+
+/* a mindmap has its own canvas zoom, and the phone header has no room */
+.app[data-notetype="mindmap"] .zoom-pair { display: none; }
+@media (max-width: 900px) { .zoom-pair { display: none; } }

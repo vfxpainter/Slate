@@ -34,6 +34,7 @@
     autoCaps: true,       // capitalise the start of a sentence as you type
     leading: 1.65,        // line spacing for everything you write in
     keepPasteFormat: false,  // paste carries styling and lists only if asked
+    imgMovable: false,    // pictures sit still until you unlock one
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
     autoKeep: 30,         // how many snapshots to hold on to
@@ -161,6 +162,7 @@
       localStorage.setItem('slate-autocaps', S.autoCaps ? '1' : '0');
       localStorage.setItem('slate-leading', String(S.leading));
       localStorage.setItem('slate-pastefmt', S.keepPasteFormat ? '1' : '0');
+      localStorage.setItem('slate-imgmove', S.imgMovable ? '1' : '0');
     } catch (e) { /* private mode */ }
     if (S.map) S.map.setFont(fontStack(), S.font.size);
     // the rich editor grows on its own; nothing to resize
@@ -208,6 +210,8 @@
     if (ld >= 1.1 && ld <= 2.6) S.leading = ld;
     var pf = localStorage.getItem('slate-pastefmt');
     if (pf !== null) S.keepPasteFormat = pf === '1';
+    var im = localStorage.getItem('slate-imgmove');
+    if (im !== null) S.imgMovable = im === '1';
     try {
       var pw = JSON.parse(localStorage.getItem('slate-panew') || 'null');
       if (pw && typeof pw.nav === 'number') S.paneW = pw;
@@ -1595,6 +1599,11 @@ function bindImgDrag() {
     if (livePointers > 1) { cancelImgDrag(); return; }    // a pinch is starting
     var img = e.target && e.target.closest ? e.target.closest('img.ni') : null;
     if (!img || e.button !== 0) return;
+    /* Locked is the resting state. A picture that can be dragged is a picture
+       that competes with scrolling and pinching for the same finger, and on a
+       phone the gesture nearly always meant zoom rather than move. Tap the
+       padlock in the image bar when you actually want to rearrange. */
+    if (!S.imgMovable) { showImgBar(img); return; }
     e.preventDefault();          // no native drag, no text selection
     showImgBar(img);
     startImgDrag(e, img);
@@ -1668,6 +1677,19 @@ function toggleImgFree() {
     $('imgSize').textContent = Math.round(parseFloat(img.style.width) || 100) + '%';
     var freeBtn = $('imgFreeBtn');
     if (freeBtn) freeBtn.classList.toggle('on', isFree(img));
+    var lockBtn = $('imgLockBtn');
+    if (lockBtn) {
+      lockBtn.classList.toggle('on', S.imgMovable);
+      lockBtn.title = S.imgMovable
+        ? 'Images can be moved — tap to lock them again'
+        : 'Unlock to move this image';
+      var shut = lockBtn.querySelector('.lock-shut'), open = lockBtn.querySelector('.lock-open');
+      if (shut && open) {
+        shut.style.display = S.imgMovable ? 'none' : '';
+        open.style.display = S.imgMovable ? '' : 'none';
+      }
+    }
+    document.body.classList.toggle('img-movable', S.imgMovable);
     placeImgGrip(img);
   }
 
@@ -4165,6 +4187,15 @@ function toggleImgFree() {
     'map-zoom-out': function () { S.map.zoomBy(1 / 1.2); },
 
     'img-align': function (e, t) { setImgAlign(t.dataset.align); },
+    'img-lock': function () {
+      S.imgMovable = !S.imgMovable;
+      try { localStorage.setItem('slate-imgmove', S.imgMovable ? '1' : '0'); }
+      catch (e) { /* private mode */ }
+      if (selectedImg) showImgBar(selectedImg);
+      toast(S.imgMovable ? 'Images can be moved' : 'Images locked in place');
+    },
+    'zoom-in': function () { zoomText(1); },
+    'zoom-out': function () { zoomText(-1); },
     'img-free': function () { toggleImgFree(); },
     'img-smaller': function () { nudgeImgSize(-10); },
     'img-bigger': function () { nudgeImgSize(10); },
@@ -4215,7 +4246,8 @@ function toggleImgFree() {
     'map-font-smaller': 1, 'map-font-bigger': 1,
     'map-line-thinner': 1, 'map-line-thicker': 1,
     'map-tone-down': 1, 'map-tone-up': 1,
-    'img-smaller': 1, 'img-bigger': 1, 'img-free': 1,
+    'img-smaller': 1, 'img-bigger': 1, 'img-free': 1, 'img-lock': 1,
+    'zoom-in': 1, 'zoom-out': 1,
     'map-zoom-in': 1, 'map-zoom-out': 1
   };
 
