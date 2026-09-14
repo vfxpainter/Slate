@@ -64,6 +64,17 @@
       <button class="ghost-btn" data-act="toggle-select">Done</button>
     </div>
 
+    <!-- Three ways to start, all in reach. The plus menu above still works;
+         this row is for not having to open it. -->
+    <div class="new-row" id="newRow" hidden>
+      <button class="new-chip" data-act="new" data-type="text">
+        <span class="nc-ico k-text">&#9998;</span>Note</button>
+      <button class="new-chip" data-act="new" data-type="list">
+        <span class="nc-ico k-list">&#9745;</span>List</button>
+      <button class="new-chip" data-act="new" data-type="mindmap">
+        <span class="nc-ico k-mindmap">&#10021;</span>Mindmap</button>
+    </div>
+
     <div class="list-bar">
       <div class="list-title" id="listTitle"></div>
       <select class="sort-select" id="sortBy" title="Sort notes">

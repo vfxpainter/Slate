@@ -35,6 +35,9 @@
     leading: 1.65,        // line spacing for everything you write in
     keepPasteFormat: false,  // paste carries styling and lists only if asked
     imgMovable: false,    // pictures sit still until you unlock one
+    pageWidth: 'full',    // reading | wide | full
+    newStyle: 'row',      // row | menu -- how a new note is started
+    folderDeep: false,    // a folder shows its own notes, not its children's
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
     autoKeep: 30,         // how many snapshots to hold on to
@@ -154,6 +157,9 @@
     root.style.setProperty('--content-font', fontStack());
     root.style.setProperty('--content-size', S.font.size + 'px');
     root.style.setProperty('--content-leading', String(S.leading));
+    $('app').dataset.pagewidth = S.pageWidth;
+    $('app').dataset.newstyle = S.newStyle;
+    if ($('newRow')) $('newRow').hidden = S.newStyle !== 'row';
     try {
       localStorage.setItem('slate-font', JSON.stringify(S.font));
       localStorage.setItem('slate-dateformat', S.dateFormat);
@@ -163,12 +169,20 @@
       localStorage.setItem('slate-leading', String(S.leading));
       localStorage.setItem('slate-pastefmt', S.keepPasteFormat ? '1' : '0');
       localStorage.setItem('slate-imgmove', S.imgMovable ? '1' : '0');
+      localStorage.setItem('slate-pagewidth', S.pageWidth);
+      localStorage.setItem('slate-newstyle', S.newStyle);
+      localStorage.setItem('slate-folderdeep', S.folderDeep ? '1' : '0');
     } catch (e) { /* private mode */ }
     if (S.map) S.map.setFont(fontStack(), S.font.size);
     // the rich editor grows on its own; nothing to resize
     if (S.note && S.note.type === 'list') {
       Array.prototype.forEach.call(document.querySelectorAll('#listItems .txt'), autosizeItem);
     }
+    /* The title is a textarea with its height set from its content, so it has
+       to be measured again whenever the type size changes -- otherwise a title
+       that now wraps onto a second line keeps its old one-line box and the
+       overflow is clipped straight through the date beneath it. */
+    if (S.note) autosize($('noteTitle'));
   }
 
   function loadFontPref() {
@@ -212,6 +226,12 @@
     if (pf !== null) S.keepPasteFormat = pf === '1';
     var im = localStorage.getItem('slate-imgmove');
     if (im !== null) S.imgMovable = im === '1';
+    var pw = localStorage.getItem('slate-pagewidth');
+    if (pw === 'reading' || pw === 'wide' || pw === 'full') S.pageWidth = pw;
+    var ns = localStorage.getItem('slate-newstyle');
+    if (ns === 'row' || ns === 'menu') S.newStyle = ns;
+    var fd = localStorage.getItem('slate-folderdeep');
+    if (fd !== null) S.folderDeep = fd === '1';
     try {
       var pw = JSON.parse(localStorage.getItem('slate-panew') || 'null');
       if (pw && typeof pw.nav === 'number') S.paneW = pw;
@@ -241,6 +261,18 @@
   function subtreeIds(id) {
     var out = [id];
     childFolders(id).forEach(function (f) { out = out.concat(subtreeIds(f.id)); });
+    return out;
+  }
+
+  /* The folders from the top down to this one. Used for the trail above the
+     list and for lighting up the ancestors in the sidebar -- "which folder am
+     I in" should never need working out. */
+  function folderChain(id) {
+    var out = [], guard = 0, f = folderById(id);
+    while (f && guard++ < 32) {
+      out.unshift(f);
+      f = f.parentId ? folderById(f.parentId) : null;
+    }
     return out;
   }
 
@@ -343,9 +375,25 @@
   function liveNotes() {
     return S.notes.filter(function (n) { return !n.deletedAt; });
   }
-  function countIn(folderId) {
+  function countDirect(folderId) {
+    return liveNotes().filter(function (n) { return n.folderId === folderId; }).length;
+  }
+  function countDeep(folderId) {
     var ids = subtreeIds(folderId);
     return liveNotes().filter(function (n) { return ids.indexOf(n.folderId) !== -1; }).length;
+  }
+  /* The number beside a folder counts what opening it would show, and nothing
+     else. A parent that said 17 while its two children said 11 and 3 was
+     counting notes you could not see in it, which is why the totals never
+     added up to anything. */
+  function countIn(folderId) {
+    return S.folderDeep ? countDeep(folderId) : countDirect(folderId);
+  }
+  // "3 here - 17 including subfolders", for the tooltip on a parent folder
+  function countHint(folderId) {
+    var here = countDirect(folderId), all = countDeep(folderId);
+    return here === all ? plural(here, 'note') + ' in this folder'
+      : plural(here, 'note') + ' in this folder · ' + all + ' including subfolders';
   }
 
   /* ================= history plumbing ================= */
@@ -457,7 +505,7 @@
       var want = S.view.slice(4);
       list = liveNotes().filter(function (n) { return noteHasTag(n, want); });
     } else {
-      var ids = subtreeIds(S.view);
+      var ids = S.folderDeep ? subtreeIds(S.view) : [S.view];
       list = liveNotes().filter(function (n) { return ids.indexOf(n.folderId) !== -1; });
     }
     if (S.q) {
@@ -519,16 +567,30 @@
   /* ================= folder tree ================= */
 
   function navItem(opts) {
-    var b = el('button', 'nav-item' + (opts.active ? ' active' : ''));
-    if (opts.twist !== undefined) {
-      var t = el('span', 'twist' + (opts.twist ? ' open' : ''), '▶');
-      t.dataset.twist = opts.folderId;
+    var cls = 'nav-item' + (opts.active ? ' active' : '');
+    if (opts.depth) cls += ' child';
+    if (opts.kids) cls += ' has-kids';
+    if (opts.onPath && !opts.active) cls += ' on-path';
+    var b = el('button', cls);
+    if (opts.depth) b.style.setProperty('--d', String(opts.depth));
+
+    /* Every folder keeps the twist's slot whether or not it has one to show.
+       Without it a childless folder's name sat a notch left of its siblings',
+       and one column of folders read as two ragged ones. */
+    if (opts.folderId) {
+      var t = el('span', 'twist' + (opts.kids ? (opts.twist ? ' open' : '') : ' blank'),
+                 opts.kids ? '▶' : '');
+      if (opts.kids) t.dataset.twist = opts.folderId;
       b.appendChild(t);
+    } else if (opts.twist !== undefined) {
+      var t0 = el('span', 'twist' + (opts.twist ? ' open' : ''), '▶');
+      b.appendChild(t0);
     }
     var ico = el('span', 'ico', opts.icon || '');
     if (opts.color) ico.dataset.fcolor = opts.color;
     b.appendChild(ico);
     b.appendChild(el('span', 'name', opts.name));
+    if (opts.hint) b.title = opts.name + ' — ' + opts.hint;
     if (opts.count !== undefined && opts.count !== null) {
       b.appendChild(el('span', 'n', String(opts.count)));
     }
@@ -570,17 +632,28 @@
 
     root.appendChild(groupHeader('Folders', 'new-folder', 'New folder'));
 
+    /* Light up the whole line of folders you are standing in, and open it, so
+       the selected one is on screen with its parents visible above it. Landing
+       in a subfolder with the branch collapsed is what made it hard to tell
+       which folder the list belonged to. */
+    var onPath = {};
+    folderChain(S.view).forEach(function (f, i, all) {
+      onPath[f.id] = true;
+      if (i < all.length - 1) S.expanded[f.id] = true;
+    });
+
     var any = false;
     (function walk(parentId, depth) {
       childFolders(parentId).forEach(function (f) {
         any = true;
         var kids = childFolders(f.id);
         var item = navItem({
-          view: f.id, name: f.name, icon: '▢', count: countIn(f.id),
+          view: f.id, name: f.name, icon: kids.length ? '▣' : '▢',
+          count: countIn(f.id), hint: countHint(f.id),
           active: S.view === f.id, folderId: f.id, color: f.color || null,
-          twist: kids.length ? !!S.expanded[f.id] : undefined
+          depth: depth, kids: kids.length > 0, onPath: !!onPath[f.id],
+          twist: !!S.expanded[f.id]
         });
-        item.style.paddingLeft = (0.55 + depth * 0.75) + 'rem';
         root.appendChild(item);
         if (kids.length && S.expanded[f.id]) walk(f.id, depth + 1);
       });
@@ -643,14 +716,31 @@
 
   function renderList() {
     if (!S.note) setTimeout(renderFolderOverview, 0);
-    $('listTitle').textContent =
-      S.q ? 'Results for "' + S.q + '"'
-        : S.view === 'all' ? 'All notes'
-        : S.view === 'pinned' ? 'Pinned'
-        : S.view === 'trash' ? 'Trash · auto-clears after ' + TRASH_DAYS + ' days'
-        : S.view === 'unfiled' ? 'Unfiled'
-        : S.view.indexOf('tag:') === 0 ? 'Tagged “' + S.view.slice(4) + '”'
-        : folderPath(S.view);
+    var title = $('listTitle');
+    var inFolder = !S.q && !!folderById(S.view);
+
+    /* A trail rather than a line of text. The folder you are in is the bright
+       name at the end; its parents are dimmer, and clicking one goes there. */
+    if (inFolder) {
+      title.innerHTML = folderChain(S.view).map(function (f, i, all) {
+        return i === all.length - 1
+          ? '<span class="crumb-here">' + esc(f.name) + '</span>'
+          : '<span class="crumb-up" data-view="' + esc(f.id) + '">' +
+            esc(f.name) + '</span>';
+      }).join('<span class="crumb-sep">›</span>');
+      title.classList.add('trail');
+    } else {
+      title.classList.remove('trail');
+      title.textContent =
+        S.q ? 'Results for "' + S.q + '"'
+          : S.view === 'all' ? 'All notes'
+          : S.view === 'pinned' ? 'Pinned'
+          : S.view === 'trash' ? 'Trash · auto-clears after ' + TRASH_DAYS + ' days'
+          : S.view === 'unfiled' ? 'Unfiled'
+          : S.view.indexOf('tag:') === 0 ? 'Tagged “' + S.view.slice(4) + '”'
+          : folderPath(S.view);
+    }
+
 
     var wrap = $('noteList');
     var keepScroll = wrap.scrollTop;
@@ -763,14 +853,22 @@
       up.dataset.view = upTo;
       up.appendChild(el('span', 'fr-ico', '⬑'));
       up.appendChild(el('span', 'fr-name',
-        upTo === 'all' ? 'All notes' : folderPath(upTo)));
+        'Up to ' + (upTo === 'all' ? 'All notes' : folderById(upTo).name)));
       strip.appendChild(up);
+
+      if (kids.length) {
+        strip.appendChild(el('div', 'fr-head',
+          plural(kids.length, 'folder') + ' inside ' + f.name));
+      }
     }
 
     kids.forEach(function (f) {
-      var row = el('button', 'folder-row');
+      var grandkids = childFolders(f.id).length;
+      var row = el('button', 'folder-row' + (here ? ' sub' : '') +
+        (grandkids ? ' has-kids' : ''));
       row.dataset.view = f.id;
-      row.appendChild(el('span', 'fr-ico', '▢'));
+      row.title = f.name + ' — ' + countHint(f.id);
+      row.appendChild(el('span', 'fr-ico', grandkids ? '▣' : '▢'));
       row.appendChild(el('span', 'fr-name', f.name));
       row.appendChild(el('span', 'fr-n', String(countIn(f.id))));
       var dot = el('span', 'fr-dot', '⋯');
@@ -779,6 +877,21 @@
       row.appendChild(dot);
       strip.appendChild(row);
     });
+
+    /* The one control that says what this list is showing, put where the
+       subfolders it is talking about are -- and offered only in a folder that
+       has any, since everywhere else it would change nothing. */
+    if (here && subtreeIds(here).length > 1) {
+      var sc = el('button', 'folder-row scope' + (S.folderDeep ? ' on' : ''));
+      sc.dataset.act = 'toggle-scope';
+      sc.appendChild(el('span', 'fr-ico', S.folderDeep ? '⊖' : '⊕'));
+      sc.appendChild(el('span', 'fr-name',
+        S.folderDeep ? 'Subfolders included' : 'Include subfolders'));
+      sc.title = S.folderDeep
+        ? 'This list holds everything nested inside — switch it off to see only what is filed here'
+        : 'This list holds only what is filed directly here — switch it on to include everything nested inside';
+      strip.appendChild(sc);
+    }
 
     var add = el('button', 'folder-row add');
     add.dataset.act = here ? 'new-subfolder-here' : 'new-folder';
@@ -1142,17 +1255,32 @@
       .sort(function (a, b) { return b.updatedAt - a.updatedAt; });
     var subs = S.folders.filter(function (x) { return x.parentId === f.id; });
 
-    var html = '<div class="fv-head"><h2>' + esc(f.name) + '</h2>' +
-      '<p class="sub">' + plural(inside.length, 'note') +
-      (subs.length ? ' · ' + plural(subs.length, 'subfolder') : '') + '</p></div>';
+    var chain = folderChain(f.id);
+    var trail = chain.slice(0, -1);
+
+    var html = '<div class="fv-head">' +
+      (trail.length
+        ? '<div class="fv-trail">' + trail.map(function (p) {
+            return '<span data-view="' + esc(p.id) + '">' + esc(p.name) + '</span>';
+          }).join(' › ') + ' ›</div>'
+        : '') +
+      '<h2>' + esc(f.name) + '</h2>' +
+      '<p class="sub">' + plural(inside.length, 'note') + ' here' +
+      (subs.length ? ' · ' + plural(subs.length, 'subfolder') +
+        ' holding ' + (countDeep(f.id) - inside.length) + ' more' : '') +
+      '</p></div>';
 
     if (subs.length) {
-      html += '<div class="fv-subs">' + subs.map(function (x) {
+      html += '<div class="fv-section">Folders inside</div>' +
+        '<div class="fv-subs">' + subs.map(function (x) {
         return '<button class="fv-sub" data-view="' + esc(x.id) + '"' +
           (x.color ? ' data-fcolor="' + esc(x.color) + '"' : '') + '>' +
-          '▢ ' + esc(x.name) + ' <span class="n">' + countIn(x.id) + '</span></button>';
+          (childFolders(x.id).length ? '▣' : '▢') + ' ' + esc(x.name) +
+          ' <span class="n">' + countDeep(x.id) + '</span></button>';
       }).join('') + '</div>';
     }
+
+    if (subs.length && inside.length) html += '<div class="fv-section">Notes in ' + esc(f.name) + '</div>';
 
     html += inside.length
       ? '<ul class="fv-list">' + inside.map(function (n) {
@@ -2767,8 +2895,10 @@ function toggleImgFree() {
     var f = folderById(id);
     if (!f) return;
     showDlg(
-      '<h3>' + esc(f.name) + '</h3><p class="sub">' + plural(countIn(id), 'note') +
-      ' including subfolders.</p>' +
+      '<h3>' + esc(f.name) + '</h3><p class="sub">' +
+      plural(countDirect(id), 'note') + ' filed here' +
+      (countDeep(id) !== countDirect(id)
+        ? ' · ' + countDeep(id) + ' including subfolders' : '') + '.</p>' +
       '<div class="opt-grid">' +
       '<button class="opt" data-x="rename"><b>Rename</b><span>Change the folder name</span></button>' +
       '<button class="opt" data-x="sub"><b>New subfolder</b><span>Nest one inside</span></button>' +
@@ -2828,7 +2958,7 @@ function toggleImgFree() {
         root.querySelector('[data-x="export"]').onclick = function () {
           closeDlg();
           var ids = subtreeIds(id);
-          exportDialog('Export "' + f.name + '"', plural(countIn(id), 'note') + ' including subfolders.',
+          exportDialog('Export "' + f.name + '"', plural(countDeep(id), 'note') + ' including subfolders.',
             function () {
               return liveNotes().filter(function (n) { return ids.indexOf(n.folderId) !== -1; })
                 .sort(function (a, b) { return b.updatedAt - a.updatedAt; });
@@ -2873,6 +3003,15 @@ function toggleImgFree() {
       '" step="1" value="' + S.font.size + '">' +
       '<div class="font-preview" id="fp">Sphinx of black quartz, judge my vow — 0123456789</div>' +
 
+      '<label class="fld" for="pw">Page width</label>' +
+      '<select id="pw" class="sort-select wide">' +
+      [['full', 'Full - use the whole pane'],
+       ['wide', 'Wide'],
+       ['reading', 'Reading measure - easiest on the eye']].map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === S.pageWidth ? ' selected' : '') +
+          '>' + o[1] + '</option>';
+      }).join('') + '</select>' +
+
       '<label class="fld" for="ls">Line spacing \u2014 <b id="lsv">' +
       S.leading.toFixed(2) + '</b></label>' +
       '<input type="range" id="ls" min="1.1" max="2.6" step="0.05" value="' +
@@ -2886,6 +3025,21 @@ function toggleImgFree() {
       '<p class="sub tight">Off means pasted text arrives plain \u2014 no ' +
       'inherited headings or numbered lists that then carry on into whatever ' +
       'you type next.</p>' +
+
+      '<label class="fld" for="nb">New note buttons</label>' +
+      '<select id="nb" class="sort-select wide">' +
+      [['row', 'A row of three — Note, List, Mindmap'],
+       ['menu', 'One + button with a menu behind it']].map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === S.newStyle ? ' selected' : '') +
+          '>' + o[1] + '</option>';
+      }).join('') + '</select>' +
+
+      '<label class="check"><input type="checkbox" id="fdp"' +
+      (S.folderDeep ? ' checked' : '') +
+      '> A folder also lists its subfolders’ notes</label>' +
+      '<p class="sub tight">Off, a folder shows only what is filed directly in ' +
+      'it and you open a subfolder to see what is inside. The count beside each ' +
+      'folder follows the same rule, so the numbers add up.</p>' +
 
       '<label class="fld" for="uf">Interface typeface</label>' +
       '<select id="uf">' + FONT_KEYS.map(function (k) {
@@ -2924,6 +3078,8 @@ function toggleImgFree() {
         var ac = root.querySelector('#ac');
         var ls = root.querySelector('#ls'), lsv = root.querySelector('#lsv');
         var pf = root.querySelector('#pf');
+        var pw = root.querySelector('#pw');
+        var nb = root.querySelector('#nb'), fdp = root.querySelector('#fdp');
         var us = root.querySelector('#us'), usv = root.querySelector('#usv');
         var uf = root.querySelector('#uf');
         function live() {
@@ -2933,6 +3089,9 @@ function toggleImgFree() {
           S.autoCaps = ac.checked;
           S.leading = parseFloat(ls.value) || 1.65;
           S.keepPasteFormat = pf.checked;
+          S.pageWidth = pw.value;
+          S.newStyle = nb.value;
+          S.folderDeep = fdp.checked;
           lsv.textContent = S.leading.toFixed(2);
           S.uiScale = parseInt(us.value, 10);
           S.uiFont = uf.value;
@@ -2945,6 +3104,7 @@ function toggleImgFree() {
           dp.textContent = 'Now: ' + fmtDate(Date.now(), { time: true }) +
             '   ·   Older: ' + fmtDate(Date.now() - 86400000 * 400, { time: true });
           applyFont();
+          renderTree();
           renderList();
           renderMeta();
         }
@@ -2955,6 +3115,9 @@ function toggleImgFree() {
         ac.onchange = live;
         ls.oninput = live;
         pf.onchange = live;
+        pw.onchange = live;
+        nb.onchange = live;
+        fdp.onchange = live;
         us.oninput = live;
         uf.onchange = live;
         root.querySelector('[data-x="reset"]').onclick = function () {
@@ -2965,6 +3128,9 @@ function toggleImgFree() {
           ac.checked = true;
           ls.value = 1.65;
           pf.checked = false;
+          pw.value = 'full';
+          nb.value = 'row';
+          fdp.checked = false;
           us.value = 100;
           uf.value = 'system';
           live();
@@ -3732,6 +3898,14 @@ function toggleImgFree() {
       toggleMenu($('noteMenu'), e);
     },
     'new': function (e, t) { closeMenus(); newNote(t.dataset.type); },
+
+    'toggle-scope': function () {
+      S.folderDeep = !S.folderDeep;
+      try { localStorage.setItem('slate-folderdeep', S.folderDeep ? '1' : '0'); }
+      catch (err) { /* private mode */ }
+      renderTree(); renderList(); renderFolderOverview();
+      toast(S.folderDeep ? 'Showing subfolders too' : 'Showing this folder only');
+    },
 
     'cycle-view': function () {
       var i = VIEW_MODES.indexOf(S.viewMode);
@@ -4510,6 +4684,14 @@ function toggleImgFree() {
     var scroller = $('editorScroll');
     if (!scroller) return;
 
+    /* A narrower column wraps the title differently, and its height is not
+       something CSS works out on its own. */
+    var settle = 0;
+    window.addEventListener('resize', function () {
+      clearTimeout(settle);
+      settle = setTimeout(function () { if (S.note) autosize($('noteTitle')); }, 120);
+    });
+
     scroller.addEventListener('wheel', function (e) {
       if (!(e.ctrlKey || e.metaKey)) return;   // plain scrolling is left alone
       if (S.note && S.note.type === 'mindmap') return;  // the canvas zooms itself
@@ -4571,6 +4753,10 @@ function toggleImgFree() {
       var nav = t.closest('[data-view]');
       if (nav) {
         S.view = nav.dataset.view;
+        /* Going into a folder opens it in the tree, so its subfolders are
+           there where you would look for them. The twist still closes it
+           again -- only the parents above you are held open. */
+        if (folderById(S.view)) S.expanded[S.view] = true;
         S.picked = {};
         delete $('app').dataset.nav;
         /* Choosing a folder is a browsing move, so put its contents in the
