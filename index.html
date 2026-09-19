@@ -32,6 +32,10 @@
     </footer>
   </aside>
 
+  <!-- The tabs: down the left on a PC, along the bottom on a phone. Filled in
+       by app.js; only shown in the new layout. -->
+  <nav class="tabbar" id="tabBar" aria-label="Sections"></nav>
+
   <!-- ============ LIST : notes in current folder ============ -->
   <section class="pane pane-list" id="paneList">
     <header class="pane-head">
@@ -41,6 +45,7 @@
       </div>
       <button class="icon-btn" data-act="cycle-view" id="viewBtn" title="View: list / grid / large grid">&#9707;</button>
       <button class="icon-btn" data-act="toggle-select" id="selectBtn" title="Select notes">&#9744;</button>
+      <button class="new-here" data-act="new-here" id="newHere" hidden><span class="nh-plus">&#43;</span><span class="nh-label">New note</span></button>
       <div class="new-menu">
         <button class="icon-btn primary" data-act="new-menu" title="New">&#43;</button>
         <div class="menu" id="newMenu" hidden>
@@ -76,6 +81,7 @@
     </div>
 
     <div class="list-bar">
+      <button class="icon-btn up-btn" data-act="tab-up" id="upBtn" title="Back" aria-label="Back" hidden>&#8592;</button>
       <div class="list-title" id="listTitle"></div>
       <select class="sort-select" id="sortBy" title="Sort notes">
         <option value="edited">Last edited</option>

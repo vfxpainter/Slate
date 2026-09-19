@@ -779,14 +779,37 @@
      id it should actually use (an existing folder's id if it merged, or its
      own id if it is genuinely new); toInsert lists only the rows that still
      need to be written, with parentId already resolved to a final id. */
+  /* Since folders were split by type, "the same folder" also means the same
+     type: a Notes "Work" and a Mindmaps "Work" sit side by side on purpose and
+     must never be merged into one.
+
+     Folders are matched by their whole path of names ("personal/articles"),
+     not by parent id. After the split a parent like PERSONAL exists once per
+     tab, so a parent id no longer pins down one place -- but the path does.
+     A folder from an older backup has no type yet: it joins whichever folder
+     already stands at that path (Notes first), and the type pass that runs
+     after every import moves each note into the right tab's twin. */
+  var KIND_ORDER = { text: 0, list: 1, mindmap: 2 };
+
   function resolveFolderMerges(existingFolders, incomingFolders) {
-    var byParent = {};                       // parentId ('' for root) -> {nameKey: id}
-    function bucket(parentId) {
-      var k = parentId || '';
-      return byParent[k] || (byParent[k] = {});
+    function pathOf(f, byId) {
+      var names = [], guard = 0, x = f;
+      while (x && guard++ < 64) {
+        names.unshift(folderKey(x.name));
+        x = x.parentId ? byId[x.parentId] : null;
+      }
+      return names.join('\u0000');
     }
-    existingFolders.forEach(function (f) {
-      bucket(f.parentId)[folderKey(f.name)] = f.id;
+
+    var existingById = {};
+    existingFolders.forEach(function (f) { existingById[f.id] = f; });
+    var byKindPath = {}, byPath = {};
+    existingFolders.slice().sort(function (a, b) {
+      return (KIND_ORDER[a.kind] || 0) - (KIND_ORDER[b.kind] || 0);
+    }).forEach(function (f) {
+      var path = pathOf(f, existingById);
+      byKindPath[(f.kind || '') + '|' + path] = f.id;
+      if (!byPath[path]) byPath[path] = f.id;
     });
 
     var byIncomingId = {};
@@ -805,26 +828,36 @@
 
         var finalParentId = (f.parentId && idMap.hasOwnProperty(f.parentId))
           ? idMap[f.parentId] : (f.parentId || null);
-        var slot = bucket(finalParentId);
-        var key = folderKey(f.name);
+        var path = pathOf(f, byIncomingId);
+        var match = f.kind ? byKindPath[f.kind + '|' + path] : byPath[path];
 
-        if (slot[key]) {
-          idMap[f.id] = slot[key];           // an equivalent folder already exists
+        if (match) {
+          idMap[f.id] = match;               // an equivalent folder already exists
         } else {
           idMap[f.id] = f.id;                // stays new, keeps its own id
-          slot[key] = f.id;                  // so incoming siblings with the same name also merge together
-          toInsert.push({
+          // so incoming siblings with the same path also merge together
+          byKindPath[(f.kind || '') + '|' + path] = f.id;
+          if (!byPath[path]) byPath[path] = f.id;
+          var row = {
             id: f.id, name: f.name, parentId: finalParentId,
             order: f.order || Date.now(), createdAt: f.createdAt || Date.now()
-          });
+          };
+          // carried across so a restored folder keeps its type, colour and pin
+          if (f.kind) row.kind = f.kind;
+          if (f.color) row.color = f.color;
+          if (f.pinned) row.pinned = true;
+          toInsert.push(row);
         }
       });
       if (next.length === pending.length) {
         // a parent cycle in the input: stop chasing it and take the rest as roots
         next.forEach(function (f) {
           idMap[f.id] = f.id;
-          toInsert.push({ id: f.id, name: f.name, parentId: null,
-            order: f.order || Date.now(), createdAt: f.createdAt || Date.now() });
+          var r = { id: f.id, name: f.name, parentId: null,
+            order: f.order || Date.now(), createdAt: f.createdAt || Date.now() };
+          if (f.kind) r.kind = f.kind;
+          if (f.color) r.color = f.color;
+          toInsert.push(r);
         });
         next = [];
       }

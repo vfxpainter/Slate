@@ -37,6 +37,10 @@
     imgMovable: false,    // pictures sit still until you unlock one
     pageWidth: 'full',    // reading | wide | full
     newStyle: 'row',      // row | menu -- how a new note is started
+    layout: 'tabs',       // tabs (Notes / Lists / Mindmaps) | classic (sidebar)
+    tab: 'text',          // text | list | mindmap | more -- the tab you are on
+    tabViews: {},         // tab -> the folder you were last in there
+    listScroll: 0,        // where the grid was scrolled when a note opened
     folderDeep: false,    // a folder shows its own notes, not its children's
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
@@ -118,6 +122,14 @@
 
   var KIND = { text: '✎', list: '☑', mindmap: '✥' };
 
+  /* The three tabs. Every folder belongs to exactly one of them and only ever
+     holds that kind of note -- open a Mindmaps folder and everything in it is
+     a mindmap. */
+  var KINDS = ['text', 'list', 'mindmap'];
+  var KIND_TAB = { text: 'Notes', list: 'Lists', mindmap: 'Mindmaps' };
+  var KIND_ONE = { text: 'note', list: 'list', mindmap: 'mindmap' };
+  var KIND_SHORT = { text: 'note', list: 'list', mindmap: 'map' };
+
   /* Typefaces are limited to families that ship with Windows and Android, so
      the app stays fully offline -- no webfont downloads. */
   var FONTS = {
@@ -159,6 +171,7 @@
     root.style.setProperty('--content-leading', String(S.leading));
     $('app').dataset.pagewidth = S.pageWidth;
     $('app').dataset.newstyle = S.newStyle;
+    $('app').dataset.layout = S.layout;
     if ($('newRow')) $('newRow').hidden = S.newStyle !== 'row';
     try {
       localStorage.setItem('slate-font', JSON.stringify(S.font));
@@ -171,6 +184,7 @@
       localStorage.setItem('slate-imgmove', S.imgMovable ? '1' : '0');
       localStorage.setItem('slate-pagewidth', S.pageWidth);
       localStorage.setItem('slate-newstyle', S.newStyle);
+      localStorage.setItem('slate-layout', S.layout);
       localStorage.setItem('slate-folderdeep', S.folderDeep ? '1' : '0');
     } catch (e) { /* private mode */ }
     if (S.map) S.map.setFont(fontStack(), S.font.size);
@@ -228,6 +242,14 @@
     if (im !== null) S.imgMovable = im === '1';
     var pw = localStorage.getItem('slate-pagewidth');
     if (pw === 'reading' || pw === 'wide' || pw === 'full') S.pageWidth = pw;
+    var lay = localStorage.getItem('slate-layout');
+    if (lay === 'tabs' || lay === 'classic') S.layout = lay;
+    var tb = localStorage.getItem('slate-tab');
+    if (tb === 'text' || tb === 'list' || tb === 'mindmap' || tb === 'more') S.tab = tb;
+    try {
+      var tv = JSON.parse(localStorage.getItem('slate-tabviews') || 'null');
+      if (tv && typeof tv === 'object') S.tabViews = tv;
+    } catch (e) { /* a damaged value just means starting at the top */ }
     var ns = localStorage.getItem('slate-newstyle');
     if (ns === 'row' || ns === 'menu') S.newStyle = ns;
     var fd = localStorage.getItem('slate-folderdeep');
@@ -255,6 +277,165 @@
   function childFolders(parentId) {
     return S.folders.filter(function (f) { return (f.parentId || null) === (parentId || null); })
       .sort(function (a, b) { return a.name.localeCompare(b.name); });
+  }
+
+  function kindOf(n) { return (n && KINDS.indexOf(n.type) !== -1) ? n.type : 'text'; }
+  function isKindTab(t) { return KINDS.indexOf(t) !== -1; }
+  // the kind a new thing gets when nothing more specific says otherwise
+  function currentKind() { return isKindTab(S.tab) ? S.tab : 'text'; }
+  /* A folder that has not been given a type yet fits every tab. That only
+     happens if sorting was skipped (no restore point could be saved), and
+     showing it everywhere is safer than hiding it anywhere. */
+  function folderFits(f, kind) { return !f.kind || f.kind === kind; }
+  function sameName(a, b) {
+    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  }
+
+  /* The folder of `kind` that stands in the same place as `folderId`: the
+     same name, under the same-named parent, all the way up. Made if it does
+     not exist yet (and added to `made`, so the caller can save it). This is
+     how a Notes "Work" and a Mindmaps "Work" stay two separate folders while
+     still reading as the same place. */
+  function twinOf(folderId, kind, made) {
+    var f = folderById(folderId);
+    if (!f) return null;
+    if (!f.kind || f.kind === kind) return f.id;
+    var parent = f.parentId ? twinOf(f.parentId, kind, made) : null;
+    for (var i = 0; i < S.folders.length; i++) {
+      var x = S.folders[i];
+      if (x.kind === kind && (x.parentId || null) === parent && sameName(x.name, f.name)) return x.id;
+    }
+    var nf = DB.blankFolder(f.name, parent);
+    nf.kind = kind;
+    if (f.color) nf.color = f.color;
+    S.folders.push(nf);
+    if (made) made.push(nf);
+    return nf.id;
+  }
+
+  // Anything out of place: a folder with no type, a folder under a parent of
+  // another type, or a note filed in a folder of another type.
+  function needsTyping() {
+    return S.folders.some(function (f) {
+      var p = f.parentId ? folderById(f.parentId) : null;
+      return !f.kind || (f.parentId && (!p || p.kind !== f.kind));
+    }) || S.notes.some(function (n) {
+      var f = n.folderId ? folderById(n.folderId) : null;
+      return n.folderId && (!f || f.kind !== kindOf(n));
+    });
+  }
+
+  /* Sort every folder into a tab. A folder that held more than one kind
+     becomes one folder per kind, with the same name and colour, in the same
+     place; an empty folder goes to all three tabs. Works on the data in
+     memory and returns what changed -- nothing is written here. Throws if the
+     result does not check out, so the caller can throw it all away. */
+  function typeFolders() {
+    var notesBefore = S.notes.length;
+    var touchedF = {}, touchedN = {}, made = [];
+    var untyped = S.folders.filter(function (f) { return !f.kind; });
+
+    if (untyped.length) {
+      var need = {};
+      var needOf = function (f) {
+        if (need[f.id]) return need[f.id];
+        need[f.id] = {};                                   // guards against a cycle
+        var set = {};
+        if (f.kind) set[f.kind] = true;
+        else {
+          S.notes.forEach(function (n) { if (n.folderId === f.id) set[kindOf(n)] = true; });
+          childFolders(f.id).forEach(function (c) {
+            var cs = needOf(c);
+            Object.keys(cs).forEach(function (k) { set[k] = true; });
+          });
+          if (!Object.keys(set).length) KINDS.forEach(function (k) { set[k] = true; });
+        }
+        need[f.id] = set;
+        return set;
+      };
+      untyped.forEach(needOf);
+
+      // parents before children, measured before anything moves
+      var depth = {};
+      untyped.forEach(function (f) { depth[f.id] = folderChain(f.id).length; });
+      untyped.sort(function (a, b) { return depth[a.id] - depth[b.id]; });
+
+      untyped.forEach(function (f) {
+        f.kind = KINDS.filter(function (k) { return need[f.id][k]; })[0] || 'text';
+        touchedF[f.id] = f;
+      });
+      untyped.forEach(function (f) {
+        var par = f.parentId ? folderById(f.parentId) : null;
+        if (par && par.kind !== f.kind) {
+          f.parentId = twinOf(par.id, f.kind, made);
+        }
+      });
+      untyped.forEach(function (f) {
+        KINDS.forEach(function (k) {
+          if (k !== f.kind && need[f.id][k]) twinOf(f.id, k, made);
+        });
+      });
+    }
+
+    // repairs, for anything an import or an older copy of Sulat left behind
+    S.folders.slice().forEach(function (f) {
+      if (!f.parentId) return;
+      var par = folderById(f.parentId);
+      if (!par) { f.parentId = null; touchedF[f.id] = f; }
+      else if (par.kind !== f.kind) { f.parentId = twinOf(par.id, f.kind, made); touchedF[f.id] = f; }
+    });
+    S.notes.forEach(function (n) {
+      if (!n.folderId) return;
+      var f = folderById(n.folderId);
+      if (!f) { n.folderId = null; touchedN[n.id] = n; }
+      else if (f.kind !== kindOf(n)) { n.folderId = twinOf(f.id, kindOf(n), made); touchedN[n.id] = n; }
+    });
+    made.forEach(function (f) { touchedF[f.id] = f; });
+
+    if (S.notes.length !== notesBefore || needsTyping()) {
+      throw new Error('folder sort did not check out');
+    }
+    return {
+      split: untyped.length,
+      made: made.length,
+      folders: Object.keys(touchedF).map(function (k) { return touchedF[k]; }),
+      notes: Object.keys(touchedN).map(function (k) { return touchedN[k]; })
+    };
+  }
+
+  /* Runs at start-up and after every import. The first time it has real work
+     to do -- splitting mixed folders -- it saves a restore point before
+     writing anything; if that fails, nothing is sorted and the folders show
+     in every tab until it can be done safely. */
+  function sortFoldersByType(afterImport) {
+    if (!needsTyping()) return Promise.resolve(null);
+    var splitting = S.folders.some(function (f) { return !f.kind; });
+    var guard = (splitting && !afterImport)
+      ? Exporter.snapshotNow('before-folder-split')
+      : Promise.resolve({ skipped: true });
+    return guard.then(function () {
+      var r;
+      try { r = typeFolders(); }
+      catch (e) {
+        console.error('Sulat:', e);
+        return load().then(function () {
+          toast('Folders were left as they are: the sort did not check out');
+          return null;
+        });
+      }
+      return DB.putMany('folders', r.folders).then(function () {
+        return DB.putMany('notes', r.notes);
+      }).then(function () {
+        if (r.split && !afterImport) {
+          toast('Folders sorted into Notes, Lists and Mindmaps · restore point saved');
+        }
+        return r;
+      });
+    }, function (e) {
+      console.warn('Sulat: no restore point, folders not sorted —', e && e.message);
+      toast('Could not save a restore point, so folders were not sorted yet');
+      return null;
+    });
   }
 
   // Every folder id at or below `id`, so a folder view includes subfolders.
@@ -493,7 +674,21 @@
 
   function visibleNotes() {
     var list;
-    if (S.view === 'trash') {
+    if (S.layout === 'tabs' && isKindTab(S.tab)) {
+      /* One tab, one kind. Browsing shows what is filed right here; a search
+         looks through this folder and everything below it. */
+      var kind = S.tab, here = folderById(S.view) ? S.view : null;
+      if (S.q) {
+        var under = here ? subtreeIds(here) : null;
+        list = liveNotes().filter(function (n) {
+          return kindOf(n) === kind && (!under || under.indexOf(n.folderId) !== -1);
+        });
+      } else {
+        list = liveNotes().filter(function (n) {
+          return kindOf(n) === kind && (n.folderId || null) === here;
+        });
+      }
+    } else if (S.view === 'trash') {
       list = S.notes.filter(function (n) { return !!n.deletedAt; });
     } else if (S.view === 'all') {
       list = liveNotes();
@@ -590,6 +785,11 @@
     if (opts.color) ico.dataset.fcolor = opts.color;
     b.appendChild(ico);
     b.appendChild(el('span', 'name', opts.name));
+    if (opts.kind) {
+      var kk = el('span', 'fkind', KIND[opts.kind] || '');
+      kk.title = KIND_TAB[opts.kind] || '';
+      b.appendChild(kk);
+    }
     if (opts.hint) b.title = opts.name + ' — ' + opts.hint;
     if (opts.count !== undefined && opts.count !== null) {
       b.appendChild(el('span', 'n', String(opts.count)));
@@ -632,6 +832,19 @@
 
     root.appendChild(groupHeader('Folders', 'new-folder', 'New folder'));
 
+    /* One kind at a time, here as in the tabs. Listing every tab's folders
+       together showed each split folder two or three times over -- a Notes,
+       a Lists and a Mindmaps "GMA WORK!" one under another. */
+    var treeKind = currentKind();
+    var seg = el('div', 'kind-seg');
+    KINDS.forEach(function (k) {
+      var sb = el('button', 'kind-seg-btn' + (k === treeKind ? ' on' : ''), KIND_TAB[k]);
+      sb.dataset.act = 'tree-kind';
+      sb.dataset.kind = k;
+      seg.appendChild(sb);
+    });
+    root.appendChild(seg);
+
     /* Light up the whole line of folders you are standing in, and open it, so
        the selected one is on screen with its parents visible above it. Landing
        in a subfolder with the branch collapsed is what made it hard to tell
@@ -644,9 +857,9 @@
 
     var any = false;
     (function walk(parentId, depth) {
-      childFolders(parentId).forEach(function (f) {
+      childFolders(parentId).filter(function (f) { return folderFits(f, treeKind); }).forEach(function (f) {
         any = true;
-        var kids = childFolders(f.id);
+        var kids = childFolders(f.id).filter(function (x) { return folderFits(x, treeKind); });
         var item = navItem({
           view: f.id, name: f.name, icon: kids.length ? '▣' : '▢',
           count: countIn(f.id), hint: countHint(f.id),
@@ -715,6 +928,7 @@
   }
 
   function renderList() {
+    if (S.layout === 'tabs') return renderTabsList();
     if (!S.note) setTimeout(renderFolderOverview, 0);
     var title = $('listTitle');
     var inFolder = !S.q && !!folderById(S.view);
@@ -761,7 +975,11 @@
       wrap.appendChild(el('div', 'list-empty', S.q ? 'Nothing matches that.' : 'No notes here yet.'));
       return;
     }
+    renderCards(wrap, notes);
+    wrap.scrollTop = keepScroll;
+  }
 
+  function renderCards(wrap, notes) {
     notes.forEach(function (n) {
       var picked = !!S.picked[n.id];
       var c = el('div', 'card' +
@@ -834,7 +1052,233 @@
       c.appendChild(foot);
       wrap.appendChild(c);
     });
+  }
+
+  /* ================= tabs: Notes / Lists / Mindmaps / More ================= */
+
+  var TAB_ICON = {
+    text: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
+    list: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8.5 12.2l2.3 2.3 4.7-4.9"/></svg>',
+    mindmap: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="5.5" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="18" cy="18.5" r="2.2"/><path d="M8.5 12h7.3M8.2 10.8 15.8 6.3M8.2 13.2l7.6 4.5"/></svg>',
+    more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>'
+  };
+
+  function renderTabBar() {
+    var bar = $('tabBar');
+    if (!bar) return;
+    if (!bar.childElementCount) {
+      ['text', 'list', 'mindmap', 'more'].forEach(function (t) {
+        var b = el('button', 'tab-btn');
+        b.dataset.act = 'tab';
+        b.dataset.tab = t;
+        b.innerHTML = TAB_ICON[t] + '<span>' + (KIND_TAB[t] || 'More') + '</span>';
+        bar.appendChild(b);
+      });
+    }
+    Array.prototype.forEach.call(bar.children, function (b) {
+      b.classList.toggle('on', b.dataset.tab === S.tab);
+      b.setAttribute('aria-current', b.dataset.tab === S.tab ? 'page' : 'false');
+    });
+    var nh = $('newHere');
+    if (nh) {
+      nh.hidden = !isKindTab(S.tab);
+      nh.lastChild.textContent = 'New ' + KIND_ONE[currentKind()];
+      nh.title = 'New ' + KIND_ONE[currentKind()] + ' here';
+    }
+  }
+
+  function saveTabState() {
+    if (isKindTab(S.tab)) S.tabViews[S.tab] = S.view;
+    try {
+      localStorage.setItem('slate-tab', S.tab);
+      localStorage.setItem('slate-tabviews', JSON.stringify(S.tabViews));
+    } catch (e) { /* private mode */ }
+  }
+
+  /* Each tab reopens the folder you were last in there, as long as it still
+     exists and still belongs to that tab. */
+  function switchTab(tab) {
+    saveTabState();
+    S.tab = tab;
+    if (tab === 'more') {
+      S.view = 'more';
+    } else {
+      var v = S.tabViews[tab], f = v && folderById(v);
+      S.view = (f && folderFits(f, tab)) ? v : 'all';
+    }
+    S.q = '';
+    $('search').value = '';
+    S.picked = {};
+    S.selecting = false;
+    if (S.note) { flush(); showEmpty(); }
+    $('app').dataset.pane = 'list';
+    saveTabState();
+    renderTabBar();
+    renderSelectBar();
+    renderList();
+    $('noteList').scrollTop = 0;
+  }
+
+  /* Coming from the classic layout, pick the tab that matches where you were. */
+  function syncTabToView() {
+    var f = folderById(S.view);
+    if (f && f.kind) S.tab = f.kind;
+    else if (S.view === 'pinned' || S.view === 'trash' || S.view.indexOf('tag:') === 0) S.tab = 'more';
+    else if (!f) S.view = S.tab === 'more' ? 'more' : 'all';
+  }
+
+  function folderTile(f, kind) {
+    var ids = subtreeIds(f.id);
+    var inside = liveNotes().filter(function (n) {
+      return ids.indexOf(n.folderId) !== -1 && kindOf(n) === kind;
+    });
+    var direct = inside.filter(function (n) { return n.folderId === f.id; }).length;
+    var subs = childFolders(f.id).filter(function (x) { return folderFits(x, kind); }).length;
+    var last = inside.reduce(function (m, n) { return Math.max(m, n.updatedAt || 0); }, f.createdAt || 0);
+
+    var t = el('div', 'ftile' + (f.pinned ? ' pinned' : ''));
+    t.dataset.view = f.id;
+    t.tabIndex = 0;
+    t.title = f.name;
+
+    var pv = el('div', 'ft-pv');
+    var pages = Math.min(3, (subs ? 1 : 0) + Math.min(2, direct));
+    if (pages) {
+      var peek = el('div', 'ft-peek');
+      for (var i = 0; i < pages; i++) peek.appendChild(el('span', 'ft-page'));
+      pv.appendChild(peek);
+    }
+    var fo = el('div', 'ft-folder');
+    if (f.color) fo.dataset.fcolor = f.color;
+    fo.appendChild(el('span', 'ft-count', String(inside.length)));
+    pv.appendChild(fo);
+    t.appendChild(pv);
+
+    var nm = el('div', 'ft-name');
+    if (f.pinned) nm.appendChild(el('span', 'ft-pin', '⚑'));
+    nm.appendChild(document.createTextNode(f.name));
+    t.appendChild(nm);
+
+    var bits = [];
+    if (subs) bits.push(plural(subs, 'folder'));
+    if (direct) bits.push(plural(direct, KIND_SHORT[kind]));
+    if (!bits.length) bits.push('Empty');
+    bits.push(fmtDate(last));
+    t.appendChild(el('div', 'ft-meta', bits.join(' · ')));
+
+    var dot = el('button', 'ft-dots', '⋮');
+    dot.dataset.folderMenu = f.id;
+    dot.title = 'Open, pin, colour, move, copy, back up or delete';
+    dot.setAttribute('aria-label', 'Folder options');
+    t.appendChild(dot);
+    return t;
+  }
+
+  function renderFolderTiles(wrap) {
+    if (S.q) return;
+    var kind = S.tab, here = folderById(S.view) ? S.view : null;
+    var kids = childFolders(here).filter(function (f) { return folderFits(f, kind); })
+      .sort(function (a, b) {
+        return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.name.localeCompare(b.name);
+      });
+    var grid = el('div', 'ftiles');
+    kids.forEach(function (f) { grid.appendChild(folderTile(f, kind)); });
+    var add = el('button', 'ftile add');
+    add.dataset.act = here ? 'new-subfolder-here' : 'new-folder';
+    add.appendChild(el('span', 'ft-plus', '＋'));
+    add.appendChild(el('span', 'ft-name', 'New folder'));
+    grid.appendChild(add);
+    wrap.appendChild(grid);
+    return kids.length;
+  }
+
+  function renderMorePage(wrap) {
+    var page = el('div', 'more-page');
+    function row(label, count, attr, val) {
+      var b = el('button', 'more-row');
+      b.dataset[attr] = val;
+      b.appendChild(el('span', 'mr-label', label));
+      if (count !== null && count !== undefined) b.appendChild(el('span', 'mr-n', String(count)));
+      page.appendChild(b);
+    }
+    page.appendChild(el('div', 'more-head', 'Your notes'));
+    row('Pinned', liveNotes().filter(function (n) { return n.pinned; }).length, 'view', 'pinned');
+    row('Trash', S.notes.filter(function (n) { return n.deletedAt; }).length, 'view', 'trash');
+    var tags = allTags();
+    if (tags.length) {
+      page.appendChild(el('div', 'more-head', 'Tags'));
+      tags.forEach(function (t) { row('#' + t.name, t.count, 'view', 'tag:' + t.name); });
+    }
+    page.appendChild(el('div', 'more-head', 'Settings'));
+    row('Backup & transfer', null, 'act', 'open-transfer');
+    row('Text & font', null, 'act', 'open-fonts');
+    row('Theme', null, 'act', 'toggle-theme');
+    var st = el('div', 'more-foot', $('storageLine').textContent || '');
+    page.appendChild(st);
+    wrap.appendChild(page);
+  }
+
+  function renderTabsList() {
+    renderTabBar();
+    var title = $('listTitle');
+    var wrap = $('noteList');
+    var keepScroll = wrap.scrollTop;
+    var here = folderById(S.view);
+    if (here && !folderFits(here, S.tab)) { S.view = 'all'; here = null; }
+
+    /* The path: the tab, then every folder down to this one. Each part except
+       the last is a way back. */
+    var parts = [];
+    if (S.tab === 'more') {
+      parts.push({ label: 'More', view: S.view === 'more' ? null : 'more' });
+      if (S.view === 'pinned') parts.push({ label: 'Pinned' });
+      else if (S.view === 'trash') parts.push({ label: 'Trash' });
+      else if (S.view.indexOf('tag:') === 0) parts.push({ label: '#' + S.view.slice(4) });
+    } else {
+      parts.push({ label: KIND_TAB[S.tab], view: here ? 'all' : null });
+      if (here) {
+        folderChain(here.id).forEach(function (f, i, all) {
+          parts.push({ label: f.name, view: i < all.length - 1 ? f.id : null });
+        });
+      }
+    }
+    title.innerHTML = parts.map(function (x) {
+      return x.view
+        ? '<span class="crumb-up" data-view="' + esc(x.view) + '">' + esc(x.label) + '</span>'
+        : '<span class="crumb-here">' + esc(x.label) + '</span>';
+    }).join('<span class="crumb-sep">›</span>');
+    title.classList.add('trail');
+    $('upBtn').hidden = parts.length < 2;
+
+    $('search').placeholder = S.tab === 'more' ? 'Search everything'
+      : here ? 'Search in ' + here.name : 'Search ' + KIND_TAB[S.tab].toLowerCase();
+
+    wrap.innerHTML = '';
+    if (S.tab === 'more' && S.view === 'more' && !S.q) {
+      renderMorePage(wrap);
+      saveTabState();
+      return;
+    }
+
+    if (S.view === 'trash' && S.notes.some(function (n) { return n.deletedAt; })) {
+      var bar = el('div', 'list-tools');
+      var empty = el('button', 'ghost-btn', 'Empty trash now');
+      empty.dataset.act = 'empty-trash';
+      bar.appendChild(empty);
+      wrap.appendChild(bar);
+    }
+
+    var folders = isKindTab(S.tab) ? renderFolderTiles(wrap) : 0;
+    var notes = visibleNotes();
+    if (!notes.length && !folders) {
+      wrap.appendChild(el('div', 'list-empty',
+        S.q ? 'Nothing matches that.'
+            : isKindTab(S.tab) ? 'Empty. Use New ' + KIND_ONE[S.tab] + ' or New folder.'
+            : 'Nothing here yet.'));
+    }
+    renderCards(wrap, notes);
     wrap.scrollTop = keepScroll;
+    saveTabState();
   }
 
   /* Folders shown inside the note list itself. The sidebar is a drawer on a
@@ -842,7 +1286,7 @@
   function renderFolderRows(wrap) {
     if (S.view === 'trash' || S.q) return;      // just noise in search and trash
     var here = folderById(S.view) ? S.view : null;
-    var kids = childFolders(here);
+    var kids = childFolders(here).filter(function (f) { return folderFits(f, currentKind()); });
 
     var strip = el('div', 'folder-strip');
 
@@ -1202,6 +1646,7 @@
 
     $('emptyState').hidden = true;
     $('editorBody').hidden = false;
+    if ($('app').dataset.pane !== 'editor') S.listScroll = $('noteList').scrollTop;
     $('app').dataset.pane = 'editor';
 
     $('noteTitle').value = n.title || '';
@@ -1232,6 +1677,9 @@
     }
     if (isList) renderItems();
     if (isMap) mountMap(); else S.mapNoteId = null;
+    /* The note page was hidden until this moment, so the canvas measured
+       itself before it had a size. Measure again once it is on screen. */
+    if (isMap) setTimeout(function () { if (S.map && S.note === n) S.map.resize(); }, 60);
 
     renderList();
     renderUndoButtons();
@@ -1314,12 +1762,17 @@
     flush();
     var folderId = (S.view === 'all' || S.view === 'pinned' || S.view === 'trash' ||
                     S.view === 'unfiled') ? null : S.view;
+    if (folderId && !folderById(folderId)) folderId = null;     // a tag or More view
+    var made = [];
+    if (folderId) folderId = twinOf(folderId, type, made);
     var n = DB.blankNote(type, folderId);
     if (type === 'list') n.items = [{ id: DB.uid(), text: '', done: false, indent: 0 }];
     if (S.view === 'pinned') n.pinned = true;
 
-    act('New ' + (type === 'mindmap' ? 'mindmap' : type), noteRefs([n.id]), function () {
-      S.notes.push(n);
+    (made.length ? DB.putMany('folders', made) : Promise.resolve()).then(function () {
+      return act('New ' + (type === 'mindmap' ? 'mindmap' : type), noteRefs([n.id]), function () {
+        S.notes.push(n);
+      });
     }).then(function () {
       renderTree();
       renderUndoButtons();
@@ -2777,9 +3230,9 @@ function toggleImgFree() {
     );
   }
 
-  function folderOptions(selectedId) {
-    return ['<option value="">Unfiled</option>'].concat(
-      S.folders.slice().sort(function (a, b) {
+  function folderOptions(selectedId, kind) {
+    return ['<option value="">' + (kind ? 'Top of ' + KIND_TAB[kind] : 'Unfiled') + '</option>'].concat(
+      S.folders.filter(function (f) { return !kind || folderFits(f, kind); }).sort(function (a, b) {
         return folderPath(a.id).localeCompare(folderPath(b.id));
       }).map(function (f) {
         return '<option value="' + esc(f.id) + '"' +
@@ -2809,7 +3262,10 @@ function toggleImgFree() {
     var f = folderById(id);
     if (!f) return;
     var banned = folderSubtree(id);
-    var choices = S.folders.filter(function (x) { return banned.indexOf(x.id) === -1; });
+    // a folder can only move within its own tab
+    var choices = S.folders.filter(function (x) {
+      return banned.indexOf(x.id) === -1 && (!f.kind || folderFits(x, f.kind));
+    });
 
     showDlg(
       '<h3>Move “' + esc(f.name) + '”</h3>' +
@@ -2842,11 +3298,14 @@ function toggleImgFree() {
     var targets = ids || (S.note ? [S.note.id] : []);
     if (!targets.length) return;
     var firstNote = byNoteId(targets[0]);
+    // one kind selected: offer only that tab's folders
+    var oneKind = targets.every(function (x) { return kindOf(byNoteId(x)) === kindOf(firstNote); })
+      ? kindOf(firstNote) : null;
     showDlg(
       '<h3>' + esc(label || 'Move note') + '</h3>' +
       '<p class="sub">Choose the folder ' + (targets.length > 1 ? 'these notes' : 'this note') +
       ' should live in.</p>' +
-      '<select id="mv">' + folderOptions(targets.length === 1 && firstNote ? firstNote.folderId : null) + '</select>' +
+      '<select id="mv">' + folderOptions(targets.length === 1 && firstNote ? firstNote.folderId : null, oneKind) + '</select>' +
       '<div class="dlg-actions">' +
       '<button class="btn" data-x="new">New folder…</button>' +
       '<button class="btn" data-x="c">Cancel</button>' +
@@ -2858,6 +3317,7 @@ function toggleImgFree() {
           promptDialog('New folder', '', function (v) {
             if (!v) return;
             var f = DB.blankFolder(v, null);
+            f.kind = firstNote ? kindOf(firstNote) : currentKind();
             act('New folder', [{ store: 'folders', id: f.id }], function () {
               S.folders.push(f);
             }).then(function () {
@@ -2877,13 +3337,22 @@ function toggleImgFree() {
   }
 
   function moveNotesTo(ids, folderId) {
-    act('Move ' + plural(ids.length, 'note'), noteRefs(ids), function () {
-      ids.forEach(function (id) {
-        var n = byNoteId(id);
-        if (!n) return;
-        n.folderId = folderId;
-        n.deletedAt = null;
-        n.updatedAt = Date.now();
+    /* Each note lands in the folder of its own kind in that place: a mindmap
+       dropped on a Notes "Work" goes to Mindmaps "Work", made if need be. */
+    var made = [], dest = {};
+    ids.forEach(function (id) {
+      var n = byNoteId(id);
+      if (n) dest[id] = folderId ? twinOf(folderId, kindOf(n), made) : null;
+    });
+    (made.length ? DB.putMany('folders', made) : Promise.resolve()).then(function () {
+      return act('Move ' + plural(ids.length, 'note'), noteRefs(ids), function () {
+        ids.forEach(function (id) {
+          var n = byNoteId(id);
+          if (!n) return;
+          n.folderId = dest[id];
+          n.deletedAt = null;
+          n.updatedAt = Date.now();
+        });
       });
     }).then(function () {
       renderTree(); renderList(); renderMeta(); renderUndoButtons();
@@ -2905,7 +3374,10 @@ function toggleImgFree() {
       '<button class="opt" data-x="move"><b>Move to folder…</b>' +
       '<span>Nest this folder inside another</span></button>' +
       '<button class="opt" data-x="export"><b>Export folder</b><span>All notes inside, any format</span></button>' +
-      '<button class="opt" data-x="del"><b>Delete folder</b><span>Notes move to Unfiled</span></button>' +
+      '<button class="opt" data-x="pin"><b>' + (f.pinned ? 'Unpin' : 'Pin to top') + '</b>' +
+      '<span>' + (f.pinned ? 'Back in name order' : 'Always first in its folder') + '</span></button>' +
+      '<button class="opt" data-x="copy"><b>Copy folder</b><span>With everything inside</span></button>' +
+      '<button class="opt" data-x="del"><b>Delete folder</b><span>Contents go to Trash</span></button>' +
       '</div>' +
       '<label class="fld">Colour</label>' +
       '<div class="fcolors">' + FOLDER_COLORS.map(function (c) {
@@ -2933,6 +3405,19 @@ function toggleImgFree() {
           closeDlg();
           moveFolderDialog(id);
         };
+        root.querySelector('[data-x="pin"]').onclick = function () {
+          closeDlg();
+          act(f.pinned ? 'Unpin folder' : 'Pin folder', [{ store: 'folders', id: id }], function () {
+            if (f.pinned) delete f.pinned; else f.pinned = true;
+          }).then(function () {
+            renderTree(); renderList(); renderUndoButtons();
+            toast(f.pinned ? 'Pinned to the top' : 'Unpinned');
+          });
+        };
+        root.querySelector('[data-x="copy"]').onclick = function () {
+          closeDlg();
+          copyFolder(id);
+        };
         root.querySelector('[data-x="rename"]').onclick = function () {
           closeDlg();
           promptDialog('Rename folder', f.name, function (v) {
@@ -2949,6 +3434,7 @@ function toggleImgFree() {
           promptDialog('New subfolder', '', function (v) {
             if (!v) return;
             var nf = DB.blankFolder(v, id);
+            nf.kind = f.kind || currentKind();
             act('New subfolder', [{ store: 'folders', id: nf.id }], function () {
               S.folders.push(nf);
               S.expanded[id] = true;
@@ -2968,14 +3454,18 @@ function toggleImgFree() {
         root.querySelector('[data-x="del"]').onclick = function () {
           closeDlg();
           confirmDialog('Delete "' + f.name + '"?',
-            'Subfolders go too. Notes inside are kept and moved to Unfiled. You can undo this.',
+            'Its subfolders go too, and everything inside moves to Trash, where it ' +
+            'stays for ' + TRASH_DAYS + ' days. Ctrl+Z brings the whole folder back.',
             'Delete folder', function () {
               var fids = subtreeIds(id);
               var orphans = S.notes.filter(function (n) { return fids.indexOf(n.folderId) !== -1; });
               var refs = fids.map(function (x) { return { store: 'folders', id: x }; })
                 .concat(noteRefs(orphans.map(function (n) { return n.id; })));
               act('Delete folder', refs, function () {
-                orphans.forEach(function (n) { n.folderId = null; });
+                orphans.forEach(function (n) {
+                  n.folderId = null;
+                  if (!n.deletedAt) { n.deletedAt = Date.now(); n.updatedAt = Date.now(); }
+                });
                 S.folders = S.folders.filter(function (x) { return fids.indexOf(x.id) === -1; });
                 if (fids.indexOf(S.view) !== -1) S.view = 'all';
               }).then(function () {
@@ -2986,6 +3476,42 @@ function toggleImgFree() {
         };
       }
     );
+  }
+
+  /* Copy a folder and everything in it. The notes are real copies with new
+     ids; pictures are shared by id, which is safe because an image is only
+     cleared away once no note anywhere refers to it. */
+  function copyFolder(id) {
+    var src = folderById(id);
+    if (!src) return;
+    var ids = subtreeIds(id), map = {}, newFolders = [], newNotes = [];
+    ids.forEach(function (fid) { map[fid] = DB.uid(); });
+    ids.forEach(function (fid) {
+      var f = folderById(fid);
+      var c = History.clone(f);
+      c.id = map[fid];
+      c.parentId = fid === id ? f.parentId : map[f.parentId];
+      if (fid === id) { c.name = f.name + ' copy'; delete c.pinned; }
+      c.createdAt = Date.now();
+      newFolders.push(c);
+    });
+    liveNotes().forEach(function (n) {
+      if (ids.indexOf(n.folderId) === -1) return;
+      var c = History.clone(n);
+      c.id = DB.uid();
+      c.folderId = map[n.folderId];
+      c.createdAt = c.updatedAt = Date.now();
+      newNotes.push(c);
+    });
+    var refs = newFolders.map(function (f) { return { store: 'folders', id: f.id }; })
+      .concat(noteRefs(newNotes.map(function (n) { return n.id; })));
+    act('Copy folder', refs, function () {
+      newFolders.forEach(function (f) { S.folders.push(f); });
+      newNotes.forEach(function (n) { S.notes.push(n); });
+    }).then(function () {
+      renderTree(); renderList(); renderUndoButtons();
+      toast('Copied "' + src.name + '" with ' + plural(newNotes.length, KIND_ONE[src.kind || 'text']));
+    });
   }
 
   function fontDialog() {
@@ -3025,6 +3551,12 @@ function toggleImgFree() {
       '<p class="sub tight">Off means pasted text arrives plain \u2014 no ' +
       'inherited headings or numbered lists that then carry on into whatever ' +
       'you type next.</p>' +
+
+      '<label class="check"><input type="checkbox" id="lay"' +
+      (S.layout === 'tabs' ? ' checked' : '') +
+      '> New layout: Notes, Lists and Mindmaps tabs</label>' +
+      '<p class="sub tight">Folder tiles you tap into, one kind per tab. Off brings ' +
+      'back the sidebar. Your notes are the same either way.</p>' +
 
       '<label class="fld" for="nb">New note buttons</label>' +
       '<select id="nb" class="sort-select wide">' +
@@ -3080,6 +3612,7 @@ function toggleImgFree() {
         var pf = root.querySelector('#pf');
         var pw = root.querySelector('#pw');
         var nb = root.querySelector('#nb'), fdp = root.querySelector('#fdp');
+        var lay = root.querySelector('#lay');
         var us = root.querySelector('#us'), usv = root.querySelector('#usv');
         var uf = root.querySelector('#uf');
         function live() {
@@ -3091,6 +3624,12 @@ function toggleImgFree() {
           S.keepPasteFormat = pf.checked;
           S.pageWidth = pw.value;
           S.newStyle = nb.value;
+          var wasLayout = S.layout;
+          S.layout = lay.checked ? 'tabs' : 'classic';
+          if (S.layout !== wasLayout) {
+            if (S.layout === 'tabs') { syncTabToView(); $('app').dataset.pane = 'list'; }
+            else if (S.view === 'more') S.view = 'all';
+          }
           S.folderDeep = fdp.checked;
           lsv.textContent = S.leading.toFixed(2);
           S.uiScale = parseInt(us.value, 10);
@@ -3117,6 +3656,7 @@ function toggleImgFree() {
         pf.onchange = live;
         pw.onchange = live;
         nb.onchange = live;
+        lay.onchange = live;
         fdp.onchange = live;
         us.oninput = live;
         uf.onchange = live;
@@ -3130,6 +3670,7 @@ function toggleImgFree() {
           pf.checked = false;
           pw.value = 'full';
           nb.value = 'row';
+          lay.checked = true;
           fdp.checked = false;
           us.value = 100;
           uf.value = 'system';
@@ -3175,7 +3716,8 @@ function toggleImgFree() {
   function folderGroups() {
     var byKey = {};
     S.folders.forEach(function (f) {
-      var key = (f.parentId || '') + ' ' + f.name.trim().toLowerCase();
+      // a Notes "Work" and a Mindmaps "Work" are two folders on purpose
+      var key = (f.parentId || '') + ' ' + (f.kind || '') + ' ' + f.name.trim().toLowerCase();
       (byKey[key] = byKey[key] || []).push(f);
     });
     return Object.keys(byKey).map(function (k) { return byKey[k]; })
@@ -3201,7 +3743,7 @@ function toggleImgFree() {
     }
 
     var working = S.folders.map(function (f) {
-      return { id: f.id, name: f.name, parentId: f.parentId, createdAt: f.createdAt };
+      return { id: f.id, name: f.name, parentId: f.parentId, createdAt: f.createdAt, kind: f.kind };
     });
     var pass = 0;
     while (pass++ < 32) {
@@ -3209,7 +3751,8 @@ function toggleImgFree() {
 
       var byKey = {};
       working.forEach(function (f) {
-        var key = (f.parentId || '') + ' ' + String(f.name || '').trim().toLowerCase();
+        var key = (f.parentId || '') + ' ' + (f.kind || '') + ' ' +
+          String(f.name || '').trim().toLowerCase();
         (byKey[key] = byKey[key] || []).push(f);
       });
       var dupes = Object.keys(byKey).map(function (k) { return byKey[k]; })
@@ -3419,6 +3962,8 @@ function toggleImgFree() {
       return Exporter.importBundle(file, { password: password });
     }).then(function (c) {
       return load().then(function () {
+        return sortFoldersByType(true);
+      }).then(function () {
         History.clear();
         S.note = null;
         renderTree(); renderList(); showEmpty(); renderStorage();
@@ -3863,6 +4408,8 @@ function toggleImgFree() {
     promptDialog('New folder', '', function (v) {
       if (!v) return;
       var f = DB.blankFolder(v, parentId);
+      var par = parentId ? folderById(parentId) : null;
+      f.kind = (par && par.kind) || currentKind();
       act('New folder', [{ store: 'folders', id: f.id }], function () {
         S.folders.push(f);
         if (parentId) S.expanded[parentId] = true;
@@ -3878,7 +4425,50 @@ function toggleImgFree() {
   var ACTIONS = {
     'nav-open': function () { $('app').dataset.nav = 'open'; },
     'nav-close': function () { delete $('app').dataset.nav; },
-    'editor-back': function () { flush(); $('app').dataset.pane = 'list'; },
+    'editor-back': function () {
+      flush();
+      $('app').dataset.pane = 'list';
+      // back to the folder you came from, scrolled to where you were
+      if (S.layout === 'tabs') {
+        renderList();
+        $('noteList').scrollTop = S.listScroll || 0;
+      }
+    },
+    /* Another tab: reopen the folder you were last in there. The tab you are
+       already on: back to its top, where all of its folders are. */
+    'tab': function (e, t) {
+      var tab = t.dataset.tab;
+      if (tab !== S.tab) { switchTab(tab); return; }
+      if (S.note) { flush(); showEmpty(); }
+      S.view = tab === 'more' ? 'more' : 'all';
+      S.q = '';
+      $('search').value = '';
+      S.picked = {};
+      S.selecting = false;
+      $('app').dataset.pane = 'list';
+      renderSelectBar();
+      renderList();
+      $('noteList').scrollTop = 0;
+    },
+    'tab-up': function () {
+      if (S.tab === 'more') S.view = 'more';
+      else {
+        var f = folderById(S.view);
+        S.view = (f && f.parentId && folderById(f.parentId)) ? f.parentId : 'all';
+      }
+      S.q = '';
+      $('search').value = '';
+      renderList();
+      $('noteList').scrollTop = 0;
+    },
+    'new-here': function () { newNote(currentKind()); },
+    'tree-kind': function (e, t) {
+      S.tab = t.dataset.kind;
+      var f = folderById(S.view);
+      if (f && !folderFits(f, S.tab)) S.view = 'all';
+      saveTabState();
+      renderTree(); renderList();
+    },
 
     'new-folder': function (e) {
       if (e) e.stopPropagation();
@@ -4753,6 +5343,11 @@ function toggleImgFree() {
       var nav = t.closest('[data-view]');
       if (nav) {
         S.view = nav.dataset.view;
+        if (S.layout === 'tabs') {
+          S.q = '';
+          $('search').value = '';
+          $('noteList').scrollTop = 0;
+        }
         /* Going into a folder opens it in the tree, so its subfolders are
            there where you would look for them. The twist still closes it
            again -- only the parents above you are held open. */
@@ -5398,14 +5993,24 @@ function toggleImgFree() {
         return load();          // pick the stamped records back up
       })
       .then(purgeOldTrash)
+      .then(function () { return sortFoldersByType(false); })
       .then(function () {
+        // reopen the tab, and the folder in it, you were last in
+        if (S.layout === 'tabs') {
+          if (S.tab === 'more') S.view = 'more';
+          else {
+            var tv = S.tabViews[S.tab], tf = tv && folderById(tv);
+            S.view = (tf && folderFits(tf, S.tab)) ? tv : 'all';
+          }
+        }
         renderTree();
         renderList();
         renderSelectBar();
         renderStorage();
         renderUndoButtons();
         var last = localStorage.getItem('slate-last');
-        if (last && byNoteId(last) && !byNoteId(last).deletedAt) {
+        // the tabs layout opens on your folders, not on whatever was open last
+        if (S.layout !== 'tabs' && last && byNoteId(last) && !byNoteId(last).deletedAt) {
           openNote(last);
           if (window.innerWidth <= 900) $('app').dataset.pane = 'list';
         }

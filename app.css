@@ -2070,3 +2070,269 @@ select option {
   font-weight: 600;
   margin: .2rem 0 .5rem;
 }
+
+/* ==========================================================================
+   New layout: Notes, Lists and Mindmaps tabs, each with its own folders
+   ========================================================================== */
+
+.tabbar, .new-here, .up-btn { display: none; }
+
+.app[data-layout="tabs"] { grid-template-columns: 84px minmax(0, 1fr); }
+.app[data-layout="tabs"] .pane-nav,
+.app[data-layout="tabs"] .resizer,
+.app[data-layout="tabs"] .new-row,
+.app[data-layout="tabs"] .new-menu,
+.app[data-layout="tabs"] [data-act="nav-open"],
+.app[data-layout="tabs"] .folder-strip { display: none !important; }
+
+/* one page at a time: the folders, or the open note across the whole window */
+.app[data-layout="tabs"] .pane-list,
+.app[data-layout="tabs"] .pane-editor { grid-column: 2; grid-row: 1; border-right: 0; }
+.app[data-layout="tabs"]:not([data-pane="editor"]) .pane-editor { display: none; }
+.app[data-layout="tabs"][data-pane="editor"] .pane-list { display: none; }
+.app[data-layout="tabs"] .pane-editor [data-act="editor-back"] { display: grid; }
+
+.app[data-layout="tabs"] .tabbar {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  grid-column: 1;
+  grid-row: 1;
+  padding: .8rem .45rem;
+  background: var(--pane-2);
+  border-right: 1px solid var(--line);
+}
+.tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .22rem;
+  padding: .6rem .2rem;
+  border-radius: 12px;
+  color: var(--ink-3);
+  font-size: .74rem;
+}
+.tab-btn svg {
+  width: 24px; height: 24px;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.tab-btn:hover { background: var(--sel); color: var(--ink); }
+.tab-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tab-btn[data-tab="more"] { margin-top: auto; }
+
+.app[data-layout="tabs"] .new-here {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  height: 34px;
+  padding: 0 .85rem;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: .86rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.app[data-layout="tabs"] .new-here:hover { filter: brightness(1.08); }
+.nh-plus { font-size: 1.15rem; line-height: 1; }
+.app[data-layout="tabs"] .up-btn { display: grid; flex: 0 0 auto; }
+.app[data-layout="tabs"] .list-bar { padding-left: .35rem; }
+.app[data-layout="tabs"] .list-title { font-size: .8rem; }
+
+/* ---- folder tiles: pages peek out, the count sits on the folder ---- */
+.ftiles {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: .75rem;
+  padding: .35rem .15rem .9rem;
+}
+.ftile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--pane);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+}
+.ftile:hover { border-color: var(--ink-3); }
+.ftile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ftile.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+.ft-pv {
+  position: relative;
+  height: 106px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 10px;
+}
+.ft-peek {
+  position: absolute;
+  top: 7px; left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+}
+.ft-page {
+  width: 25px; height: 36px;
+  border-radius: 3px;
+  background-color: var(--pane-2);
+  border: 1px solid var(--line);
+  background-image: repeating-linear-gradient(to bottom,
+      transparent 0 4px, var(--ink-3) 4px 5px);
+  background-size: 64% 70%;
+  background-position: 50% 5px;
+  background-repeat: no-repeat;
+}
+.ft-folder {
+  position: relative;
+  z-index: 1;
+  width: 84px; height: 52px;
+  border-radius: 6px 6px 9px 9px;
+  background: var(--fc, #e3a23d);
+}
+.ft-folder::before {
+  content: "";
+  position: absolute;
+  left: 0; top: -8px;
+  width: 34px; height: 11px;
+  border-radius: 5px 5px 0 0;
+  background: inherit;
+}
+.ft-count {
+  position: absolute;
+  right: 8px; bottom: 5px;
+  font-size: .86rem;
+  font-weight: 700;
+  color: rgba(35, 22, 4, .78);
+}
+.ft-name {
+  padding: .45rem .8rem 0;
+  font-size: .92rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ft-pin { color: var(--accent); margin-right: .3rem; }
+.ft-meta {
+  padding: .12rem .8rem .7rem;
+  font-size: .74rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ft-dots {
+  position: absolute;
+  top: 6px; right: 6px;
+  z-index: 2;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 1.15rem;
+}
+.ft-dots:hover { background: var(--sel); color: var(--ink); }
+.ftile.add {
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  min-height: 150px;
+  border-style: dashed;
+  color: var(--ink-3);
+}
+.ftile.add .ft-name { padding: 0; color: inherit; font-weight: 500; }
+.ft-plus { font-size: 1.6rem; line-height: 1; }
+.ftile.add:hover { color: var(--accent); border-color: var(--accent); }
+
+/* the classic sidebar says which tab a folder belongs to, since a Notes
+   and a Mindmaps folder can share a name */
+.fkind { flex: 0 0 auto; font-size: .78rem; color: var(--ink-3); opacity: .8; }
+
+/* the old layout's switch between the three kinds of folder */
+.kind-seg {
+  display: flex;
+  margin: 0 .55rem .45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.kind-seg-btn {
+  flex: 1;
+  padding: .32rem 0;
+  font-size: .76rem;
+  color: var(--ink-3);
+}
+.kind-seg-btn + .kind-seg-btn { border-left: 1px solid var(--line); }
+.kind-seg-btn:hover { background: var(--sel); color: var(--ink); }
+.kind-seg-btn.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* ---- More ---- */
+.more-page { grid-column: 1 / -1; max-width: 36rem; padding: .2rem .2rem 2rem; }
+.more-head {
+  padding: 1rem .7rem .35rem;
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.more-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: .8rem .7rem;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: .98rem;
+  color: var(--ink);
+  text-align: left;
+}
+.more-row:hover { background: var(--sel); }
+.mr-label { flex: 1; }
+.mr-n { font-size: .85rem; color: var(--ink-3); }
+.more-foot { padding: 1rem .7rem; font-size: .76rem; color: var(--ink-3); }
+
+/* ---- phone: tabs along the bottom, + floating above them ---- */
+@media (max-width: 900px) {
+  .app[data-layout="tabs"] { grid-template-columns: 1fr; }
+  .app[data-layout="tabs"] .pane-list,
+  .app[data-layout="tabs"] .pane-editor { grid-column: 1; }
+  .app[data-layout="tabs"] .tabbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 55;
+    flex-direction: row;
+    gap: 0;
+    padding: .3rem .3rem calc(.3rem + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid var(--line);
+  }
+  .app[data-layout="tabs"] .tab-btn { flex: 1; padding: .35rem 0; }
+  .app[data-layout="tabs"] .tab-btn[data-tab="more"] { margin-top: 0; }
+  .app[data-layout="tabs"][data-pane="editor"] .tabbar { display: none; }
+  .app[data-layout="tabs"] .pane-list { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .app[data-layout="tabs"] .new-here {
+    position: fixed;
+    right: 16px;
+    bottom: calc(80px + env(safe-area-inset-bottom));
+    z-index: 56;
+    width: 56px; height: 56px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+    box-shadow: var(--shadow);
+  }
+  .app[data-layout="tabs"] .new-here .nh-label { display: none; }
+  .app[data-layout="tabs"] .new-here .nh-plus { font-size: 1.8rem; }
+  .ftiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .app[data-layout="tabs"] .note-scroll { padding-bottom: 6rem; }
+}
