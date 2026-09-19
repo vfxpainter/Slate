@@ -2336,3 +2336,66 @@ select option {
   .ftiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
   .app[data-layout="tabs"] .note-scroll { padding-bottom: 6rem; }
 }
+
+/* ==========================================================================
+   Phone: give the page to what you are writing
+   The title block, a two-line date and a toolbar that wrapped onto five rows
+   took half the screen before a mindmap got any of it. Now the heading is
+   one compact block, the tools are a single row you swipe, and the canvas
+   takes every pixel that is left.
+   ========================================================================== */
+@media (max-width: 900px) {
+  .editor-body { padding-top: .45rem; }
+  .note-title { font-size: 1.2rem; padding-bottom: .1rem; }
+  .note-meta {
+    font-size: .64rem;
+    margin: 0 0 .45rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tag-row { margin-bottom: .45rem; }
+  .note-rich, .list-editor, .map-editor { padding-top: .45rem; margin-top: 0; }
+
+  /* the mindmap tools: one row, swiped sideways, no keyboard hints */
+  .map-tools {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: .3rem;
+    margin-bottom: .35rem;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .map-tools::-webkit-scrollbar { display: none; }
+  .map-tools .ghost-btn {
+    flex: 0 0 auto;
+    padding: .34rem .6rem;
+    font-size: .82rem;
+    white-space: nowrap;
+  }
+  .map-tools kbd { display: none; }
+  .map-hint { display: none; }
+
+  /* and the canvas fills the rest of the screen */
+  .app[data-notetype="mindmap"] .editor-scroll { overflow: hidden; }
+  .app[data-notetype="mindmap"] .editor-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding-bottom: .5rem;
+  }
+  .app[data-notetype="mindmap"] .map-editor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .app[data-notetype="mindmap"] .map-style { flex: 0 0 auto; }
+  .app[data-notetype="mindmap"] .map-canvas-wrap {
+    flex: 1 1 0;
+    /* a height dragged on an older build sits in the element's own style */
+    height: auto !important;
+    min-height: 200px;
+    resize: none;
+  }
+}
