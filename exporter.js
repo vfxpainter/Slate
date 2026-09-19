@@ -875,7 +875,8 @@
       items: n.items || [], map: n.map || null,
       images: (n.images || []).slice().sort(),
       tags: (n.tags || []).slice().sort(),
-      enc: n.enc || null
+      enc: n.enc || null,
+      pages: n.pages || null
     });
   }
 

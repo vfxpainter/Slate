@@ -2399,3 +2399,126 @@ select option {
     resize: none;
   }
 }
+
+/* ==========================================================================
+   Mindmap screen, round two: a real back arrow, tools as icons, and on a
+   phone the map gets nearly the whole screen, the way Nice Mind does it
+   ========================================================================== */
+.back-btn { width: 44px; height: 44px; border-radius: 10px; color: var(--ink); }
+.back-btn svg {
+  width: 26px; height: 26px;
+  fill: none; stroke: currentColor;
+  stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
+}
+.back-btn:hover { background: var(--sel); color: var(--accent); }
+
+.map-tools .ghost-btn { display: inline-flex; align-items: center; gap: .35rem; }
+.mt-ico { display: inline-grid; place-items: center; }
+.mt-ico svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+
+@media (max-width: 900px) {
+  /* icons only: one short row, and the whole screen below it for the map */
+  .map-tools .mt-label { display: none; }
+  .map-tools .ghost-btn {
+    width: 40px; height: 38px;
+    padding: 0;
+    justify-content: center;
+  }
+  .mt-ico svg { width: 21px; height: 21px; }
+
+  /* the central node already names the map, as it does in Nice Mind */
+  .app[data-notetype="mindmap"] .note-meta,
+  .app[data-notetype="mindmap"] .tag-row,
+  .app[data-notetype="mindmap"] .gallery { display: none; }
+  .app[data-notetype="mindmap"] .note-title {
+    font-size: 1rem;
+    padding: 0;
+    margin-bottom: .25rem;
+  }
+  .app[data-notetype="mindmap"] .editor-body {
+    padding: .3rem .5rem .35rem;
+  }
+  .app[data-notetype="mindmap"] .map-editor { border-top: 0; padding-top: 0; }
+}
+
+/* Notices: a small pill, one line where it fits, out of the way. The phone
+   size was bigger than the desktop one, which was the wrong way round. */
+.toast {
+  padding: .32rem .8rem;
+  font-size: .76rem;
+  line-height: 1.35;
+  border-radius: 999px;
+  max-width: min(22rem, 86vw);
+  text-align: center;
+  opacity: .94;
+}
+@media (max-width: 900px) {
+  .toast { font-size: .78rem; padding: .34rem .85rem; bottom: 5.2rem; }
+}
+
+/* ==========================================================================
+   Desktop too: the working area first
+   Words on every tool, a line of keyboard hints, a date and a two-row
+   toolbar cost about 200px above the map before any of it was used. The
+   tools are icons in one row now (each still named on hover), the hints and
+   the date are gone from mindmaps, and the title is one small line.
+   ========================================================================== */
+.map-tools {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: .25rem;
+  margin-bottom: .35rem;
+  scrollbar-width: none;
+}
+.map-tools::-webkit-scrollbar { display: none; }
+.map-tools .mt-label { display: none; }
+.map-tools .ghost-btn {
+  flex: 0 0 auto;
+  width: 36px; height: 34px;
+  padding: 0;
+  justify-content: center;
+}
+.map-hint { display: none; }
+
+.app[data-notetype="mindmap"] .note-meta,
+.app[data-notetype="mindmap"] .tag-row,
+.app[data-notetype="mindmap"] .gallery { display: none; }
+.app[data-notetype="mindmap"] .note-title {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: .3rem;
+}
+.app[data-notetype="mindmap"] .editor-body { padding-top: .45rem; }
+.app[data-notetype="mindmap"] .map-editor { border-top: 0; padding-top: 0; margin-top: 0; }
+
+/* notes and lists: a tighter heading, the date kept to one quiet line */
+@media (min-width: 901px) {
+  .editor-body { padding-top: .8rem; }
+  .note-meta { margin-bottom: .6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---- pages ---- */
+.page-chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 .35rem;
+  padding: .12rem .6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: .74rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.page-chip:hover { border-color: var(--accent); }
+.page-list { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .8rem; max-height: 50vh; overflow-y: auto; }
+.page-row { display: flex; align-items: center; gap: .2rem; border: 1px solid var(--line); border-radius: 9px; padding: .15rem .25rem; }
+.page-row.on { border-color: var(--accent); background: var(--accent-soft); }
+.page-open { flex: 1; display: flex; align-items: center; gap: .55rem; text-align: left; padding: .45rem .4rem; font-size: .9rem; color: var(--ink); min-width: 0; }
+.pg-n { flex: 0 0 auto; width: 1.5rem; text-align: center; font-size: .75rem; color: var(--ink-3); }
+.page-row .icon-btn { width: 30px; height: 30px; font-size: .85rem; }
+.page-row .icon-btn:disabled { opacity: .3; }

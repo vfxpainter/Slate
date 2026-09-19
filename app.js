@@ -70,7 +70,8 @@
     t.textContent = msg;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.hidden = true; }, 2600);
+    toastTimer = setTimeout(function () { t.hidden = true; },
+      Math.min(2600, 1200 + String(msg).length * 30));
   }
 
   /* Date display. "relative" is the old behaviour (time today, then short
@@ -669,6 +670,14 @@
     var parts = [n.title || '', n.body || '', tagsOf(n).join(' ')];
     (n.items || []).forEach(function (i) { parts.push(i.text || ''); });
     if (n.map && n.map.nodes) n.map.nodes.forEach(function (x) { parts.push(x.text || ''); });
+    (n.pages || []).forEach(function (p) {
+      parts.push(p.name || '');
+      var c = p.content;
+      if (!c) return;
+      parts.push(c.body || '');
+      (c.items || []).forEach(function (i) { parts.push(i.text || ''); });
+      if (c.map && c.map.nodes) c.map.nodes.forEach(function (x) { parts.push(x.text || ''); });
+    });
     return parts.join(' \n ').toLowerCase();
   }
 
@@ -1632,6 +1641,16 @@
     if (n.deletedAt) bits.unshift('in trash');
     if (n.pinned) bits.push('pinned');
     $('noteMeta').textContent = bits.join('  ·  ');
+    var chip = $('pageChip');
+    if (chip) {
+      var ps = n.pages || [];
+      chip.hidden = ps.length < 2 || !!n.locked;
+      if (ps.length > 1) {
+        var at = pageIndex(n);
+        chip.textContent = (ps[at].name || 'Page ' + (at + 1)) + '  ·  ' + (at + 1) + ' of ' + ps.length + '  ▾';
+        chip.title = 'Switch, add or rename pages';
+      }
+    }
     var chip = $('editorCrumb');
     chip.textContent = n.folderId ? '▢ ' + folderPath(n.folderId) : '◌ Unfiled';
     chip.classList.toggle('unfiled', !n.folderId);
@@ -3021,6 +3040,49 @@ function toggleImgFree() {
     if (out) out.textContent = S.map.gapY;
   }
 
+  /* The mindmap tools as icons. The words stay beside them on a wide screen,
+     where there is room; on a phone the icons alone make one short row, and
+     every button keeps its name as a tooltip and for screen readers. */
+  var MAP_ICONS = {
+    'map-add': '<rect x="3.5" y="7" width="17" height="10" rx="3"/><path d="M12 9.5v5M9.5 12h5"/>',
+    'map-child': '<rect x="2.5" y="9" width="7" height="6" rx="2"/><rect x="15.5" y="3.5" width="6" height="5" rx="1.5"/><rect x="15.5" y="15.5" width="6" height="5" rx="1.5"/><path d="M9.5 12h3M12.5 6v12M12.5 6h3M12.5 18h3"/>',
+    'map-rename': '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    'map-select-mode': '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2.6"/>',
+    'map-link': '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4"/>',
+    'map-image': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8 8"/>',
+    'map-image-remove': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M9 9l6 6M15 9l-6 6"/>',
+    'map-copy': '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
+    'map-paste': '<rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3.5h6V5M9 11h6M9 15h4"/>',
+    'map-duplicate': '<rect x="3" y="3" width="12" height="12" rx="2"/><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M15 12.5v5M12.5 15h5"/>',
+    'map-unlink': '<path d="M9.5 14.5l-2 2a3.2 3.2 0 0 1-4.5-4.5l2-2"/><path d="M14.5 9.5l2-2a3.2 3.2 0 0 1 4.5 4.5l-2 2"/><path d="M8 3.5v2.5M3.5 8H6M16 20.5V18M20.5 16H18"/>',
+    'map-del': '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>',
+    'map-zoom-out': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M8 11h6"/>',
+    'map-zoom-in': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M8 11h6M11 8v6"/>',
+    'map-fit': '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+    'map-auto': '<rect x="2.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="3.5" width="6" height="4" rx="1"/><rect x="15.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="16.5" width="6" height="4" rx="1"/><path d="M8.5 12h7M12 5.5v13M12 5.5h3.5M12 18.5h3.5"/>',
+    'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>'
+  };
+
+  function decorateMapTools() {
+    Array.prototype.forEach.call(document.querySelectorAll('.map-tools .ghost-btn'), function (b) {
+      var path = MAP_ICONS[b.dataset.act];
+      if (!path || b.querySelector('.mt-ico')) return;
+      var name = (b.childNodes[0] && b.childNodes[0].textContent || b.textContent).trim()
+        .replace(/^[\u002b\uff0b\u2212]\s*/, '');
+      var key = b.querySelector('kbd');
+      var label = el('span', 'mt-label');
+      while (b.firstChild) label.appendChild(b.firstChild);
+      var ico = el('span', 'mt-ico');
+      ico.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
+      b.appendChild(ico);
+      b.appendChild(label);
+      var tip = { 'map-zoom-out': 'Zoom out', 'map-zoom-in': 'Zoom in', 'map-add': 'New node',
+        'map-image': 'Add image', 'map-image-remove': 'Remove image' }[b.dataset.act] || name;
+      b.title = tip + (key ? ' (' + key.textContent + ')' : '');
+      b.setAttribute('aria-label', tip);
+    });
+  }
+
   function mountMap() {
     var canvas = $('mapCanvas');
     if (!S.map) {
@@ -3033,7 +3095,8 @@ function toggleImgFree() {
           S.note.map = S.map.getData();
           // On a mindmap the note's image list is exactly what the nodes use,
           // so images drop out of the backup and get reclaimed when a node goes.
-          S.note.images = S.map.imageIds();
+          S.note.images = S.map.imageIds().concat(otherPageImages(S.note))
+            .filter(function (x, i, all) { return all.indexOf(x) === i; });
           S.note.updatedAt = Date.now();
           var after = [History.rec('notes', S.note.id, S.note)];
           History.push('Edit mindmap', before, after);
@@ -3080,6 +3143,7 @@ function toggleImgFree() {
     S.map.setLinkMode(false);
     S.map.setSelectMode(false);
     S.map.setData(S.note.map || { nodes: [], edges: [] });
+    $('autoBtn').classList.toggle('on', !!S.map.auto);
     S.map.resize();
     applyMapSpacing();
     $('mapHint').textContent = mapHintText();
@@ -3094,10 +3158,9 @@ function toggleImgFree() {
         renderMapTools(S.map.selected);
       };
     }
-    // 165px of controls is a lot of a phone screen; start collapsed there
-    var narrow = window.innerWidth <= 900;
-    $('mapEditor').classList.toggle('style-off', narrow);
-    $('styleBtn').classList.toggle('on', !narrow);
+    // the style bar is a whole row of screen: closed until the Style button asks for it
+    $('mapEditor').classList.add('style-off');
+    $('styleBtn').classList.remove('on');
     renderMapTools(null);
     requestAnimationFrame(function () {
       if (S.mapNoteId !== (S.note && S.note.id)) return;
@@ -3207,7 +3270,7 @@ function toggleImgFree() {
           b.onclick = function () {
             var fmt = b.dataset.fmt;
             closeDlg();
-            Promise.resolve(getNotes()).then(function (notes) {
+            Promise.resolve(getNotes()).then(expandPages).then(function (notes) {
               if (!notes.length) { toast('Nothing to export.'); return; }
               var names = {};
               notes.forEach(function (n) {
@@ -3512,6 +3575,193 @@ function toggleImgFree() {
       renderTree(); renderList(); renderUndoButtons();
       toast('Copied "' + src.name + '" with ' + plural(newNotes.length, KIND_ONE[src.kind || 'text']));
     });
+  }
+
+  /* ================= pages ================= */
+
+  function blankPageContent(type) {
+    if (type === 'list') return { items: [{ id: DB.uid(), text: '', done: false, indent: 0 }] };
+    if (type === 'mindmap') {
+      return { map: { nodes: [{ id: DB.uid(), text: 'Start here', x: 0, y: 0, noteId: null }], edges: [] } };
+    }
+    return { body: '', bodyHtml: '' };
+  }
+
+  // a note that has never had pages is one page; give it the list to hang more on
+  function ensurePages(n) {
+    if (!Array.isArray(n.pages) || !n.pages.length) {
+      n.pages = [{ id: DB.uid(), name: 'Page 1', content: null }];
+      n.page = n.pages[0].id;
+    }
+    if (!n.pages.some(function (p) { return p.id === n.page; })) n.page = n.pages[0].id;
+    return n.pages;
+  }
+
+  function pageIndex(n) {
+    var ps = n.pages || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === n.page) return i;
+    return 0;
+  }
+
+  // the pictures used on the page you are on, so they can travel with it
+  function currentPageImages(n) {
+    var ids = [];
+    ((n.map && n.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+    String(n.bodyHtml || '').replace(/data-img="([^"]+)"/g, function (m, id) { ids.push(id); return m; });
+    return ids;
+  }
+
+  function otherPageImages(n) {
+    var ids = [];
+    (n.pages || []).forEach(function (p) {
+      var c = p.content;
+      if (!c) return;
+      (c.imgs || []).forEach(function (id) { ids.push(id); });
+      ((c.map && c.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+    });
+    return ids;
+  }
+
+  // put the page you are on away and bring another one out
+  function swapPage(n, toId) {
+    ensurePages(n);
+    var from = n.pages[pageIndex(n)];
+    var to = n.pages.filter(function (p) { return p.id === toId; })[0];
+    if (!to || to === from) return;
+    from.content = History.clone({
+      body: n.body || '', bodyHtml: n.bodyHtml || '',
+      items: n.items || [], map: n.map || { nodes: [], edges: [] },
+      imgs: currentPageImages(n)
+    });
+    var c = to.content || blankPageContent(n.type);
+    n.body = c.body || '';
+    n.bodyHtml = c.bodyHtml || '';
+    n.items = c.items || (n.type === 'list' ? blankPageContent('list').items : []);
+    n.map = c.map || (n.type === 'mindmap' ? blankPageContent('mindmap').map : { nodes: [], edges: [] });
+    to.content = null;
+    n.page = to.id;
+  }
+
+  // For export: a note with several pages goes out as one part per page.
+  function expandPages(notes) {
+    var out = [];
+    (notes || []).forEach(function (n) {
+      if (!n.pages || n.pages.length < 2 || n.locked) { out.push(n); return; }
+      var here = pageIndex(n);
+      n.pages.forEach(function (p, i) {
+        var c = i === here ? n : (p.content || {});
+        var copy = {};
+        for (var k in n) if (Object.prototype.hasOwnProperty.call(n, k)) copy[k] = n[k];
+        copy.title = (displayTitle(n) || 'Untitled') + ' — ' + (p.name || 'Page ' + (i + 1));
+        copy.body = c.body || '';
+        copy.bodyHtml = c.bodyHtml || '';
+        copy.items = c.items || [];
+        copy.map = c.map || { nodes: [], edges: [] };
+        delete copy.pages;
+        out.push(copy);
+      });
+    });
+    return out;
+  }
+
+  function pagesDialog() {
+    var n = S.note;
+    if (!n) return;
+    if (n.locked) { toast('Unlock the note first'); return; }
+    flush();
+    var ps = n.pages && n.pages.length ? n.pages : [{ id: '_one', name: 'Page 1' }];
+    var here = n.pages && n.pages.length ? pageIndex(n) : 0;
+    showDlg(
+      '<h3>Pages</h3>' +
+      '<p class="sub">Each page is its own sheet in this ' + KIND_ONE[kindOf(n)] +
+      '. Tap one to open it.</p>' +
+      '<div class="page-list">' + ps.map(function (p, i) {
+        return '<div class="page-row' + (i === here ? ' on' : '') + '">' +
+          '<button class="page-open" data-pg="' + esc(p.id) + '">' +
+          '<span class="pg-n">' + (i + 1) + '</span>' + esc(p.name || 'Page ' + (i + 1)) + '</button>' +
+          '<button class="icon-btn" data-pg-up="' + esc(p.id) + '" title="Move up"' +
+          (i === 0 ? ' disabled' : '') + '>↑</button>' +
+          '<button class="icon-btn" data-pg-ren="' + esc(p.id) + '" title="Rename">✎</button>' +
+          '<button class="icon-btn" data-pg-del="' + esc(p.id) + '" title="Delete"' +
+          (ps.length < 2 ? ' disabled' : '') + '>✕</button></div>';
+      }).join('') + '</div>' +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Close</button>' +
+      '<button class="btn solid" data-x="add">＋ New page</button></div>',
+      function (root) {
+        root.querySelector('[data-x="c"]').onclick = closeDlg;
+        function redo(label, fn) {
+          editNote(label, function () { fn(); n.updatedAt = Date.now(); });
+          closeDlg();
+          openNote(n.id);
+        }
+        root.querySelector('[data-x="add"]').onclick = function () {
+          redo('New page', function () {
+            ensurePages(n);
+            var at = pageIndex(n);
+            var pg = { id: DB.uid(), name: 'Page ' + (n.pages.length + 1), content: blankPageContent(n.type) };
+            n.pages.splice(at + 1, 0, pg);
+            swapPage(n, pg.id);
+          });
+          toast('New page');
+        };
+        Array.prototype.forEach.call(root.querySelectorAll('[data-pg]'), function (b) {
+          b.onclick = function () {
+            if (b.dataset.pg === n.page || b.dataset.pg === '_one') { closeDlg(); return; }
+            redo('Switch page', function () { swapPage(n, b.dataset.pg); });
+          };
+        });
+        Array.prototype.forEach.call(root.querySelectorAll('[data-pg-up]'), function (b) {
+          b.onclick = function () {
+            if (b.dataset.pgUp === '_one') return;
+            editNote('Move page', function () {
+              var i = n.pages.map(function (p) { return p.id; }).indexOf(b.dataset.pgUp);
+              if (i > 0) n.pages.splice(i - 1, 0, n.pages.splice(i, 1)[0]);
+              n.updatedAt = Date.now();
+            });
+            closeDlg();
+            renderMeta();
+            pagesDialog();
+          };
+        });
+        Array.prototype.forEach.call(root.querySelectorAll('[data-pg-ren]'), function (b) {
+          b.onclick = function () {
+            var id = b.dataset.pgRen;
+            closeDlg();
+            var cur = (n.pages || []).filter(function (p) { return p.id === id; })[0];
+            promptDialog('Rename page', cur ? cur.name : 'Page 1', function (v) {
+              if (!v) return;
+              editNote('Rename page', function () {
+                ensurePages(n);
+                var p = id === '_one' ? n.pages[0] : n.pages.filter(function (x) { return x.id === id; })[0];
+                if (p) p.name = v;
+                n.updatedAt = Date.now();
+              });
+              renderMeta();
+              pagesDialog();
+            });
+          };
+        });
+        Array.prototype.forEach.call(root.querySelectorAll('[data-pg-del]'), function (b) {
+          b.onclick = function () {
+            var id = b.dataset.pgDel;
+            if (!n.pages || n.pages.length < 2) return;
+            closeDlg();
+            var p = n.pages.filter(function (x) { return x.id === id; })[0];
+            confirmDialog('Delete "' + (p.name || 'this page') + '"?',
+              'Everything on this page goes. Ctrl+Z brings it back.', 'Delete page', function () {
+                redo('Delete page', function () {
+                  if (id === n.page) {
+                    var i = pageIndex(n);
+                    swapPage(n, n.pages[i === 0 ? 1 : i - 1].id);
+                  }
+                  n.pages = n.pages.filter(function (x) { return x.id !== id; });
+                  if (n.pages.length === 1) { delete n.pages; delete n.page; }
+                });
+              }, true);
+          };
+        });
+      }
+    );
   }
 
   function fontDialog() {
@@ -4727,6 +4977,7 @@ function toggleImgFree() {
         }
       );
     },
+    'pages': function () { closeMenus(); pagesDialog(); },
     'duplicate': function () {
       closeMenus();
       var copy = History.clone(S.note);
@@ -4947,6 +5198,13 @@ function toggleImgFree() {
       focusMap();
     },
     'map-fit': function () { S.map.fit(); focusMap(); },
+    'map-auto': function () {
+      S.map.setAuto(!S.map.auto);
+      $('autoBtn').classList.toggle('on', S.map.auto);
+      S.map.fit();
+      toast(S.map.auto ? 'Auto-arrange on' : 'Auto-arrange off');
+      focusMap();
+    },
     'map-zoom-in': function () { S.map.zoomBy(1.2); },
     'map-zoom-out': function () { S.map.zoomBy(1 / 1.2); },
 
@@ -5985,6 +6243,7 @@ function toggleImgFree() {
     History.configure({ apply: applyRecords, onChange: renderUndoButtons });
 
     bind();
+    decorateMapTools();
     load()
       .then(firstRun)
       .then(DB.migrateNotes)

@@ -81,7 +81,7 @@
     </div>
 
     <div class="list-bar">
-      <button class="icon-btn up-btn" data-act="tab-up" id="upBtn" title="Back" aria-label="Back" hidden>&#8592;</button>
+      <button class="icon-btn up-btn back-btn" data-act="tab-up" id="upBtn" title="Back" aria-label="Back" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4.5 7.5 12l7.5 7.5"/></svg></button>
       <div class="list-title" id="listTitle"></div>
       <select class="sort-select" id="sortBy" title="Sort notes">
         <option value="edited">Last edited</option>
@@ -102,7 +102,7 @@
   <!-- ============ EDITOR ============ -->
   <main class="pane pane-editor" id="paneEditor">
     <header class="pane-head">
-      <button class="icon-btn only-narrow" data-act="editor-back" title="Back">&#8592;</button>
+      <button class="icon-btn only-narrow back-btn" data-act="editor-back" title="Back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4.5 7.5 12l7.5 7.5"/></svg></button>
       <button class="folder-chip" data-act="move" id="editorCrumb" title="Move to another folder"></button>
       <div class="undo-pair">
         <button class="icon-btn" data-act="undo" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">
@@ -128,6 +128,7 @@
         <button data-act="pin"><b>Pin / unpin</b></button>
         <button data-act="move"><b>Move to folder…</b></button>
         <button data-act="export-note"><b>Export this note…</b></button>
+        <button data-act="pages"><b>Pages…</b><span>More than one sheet in this note</span></button>
         <button data-act="duplicate"><b>Duplicate</b></button>
         <button data-act="add-tag"><b>Add a tag…</b><span>Labels that cut across folders</span></button>
         <button data-act="lock"><b>Lock note…</b><span>Encrypt it behind a passphrase</span></button>
@@ -147,6 +148,7 @@
              scrolled sideways off a phone screen instead of wrapping -->
         <textarea class="note-title" id="noteTitle" placeholder="Title" rows="1"
                   autocomplete="off" spellcheck="false" autocapitalize="words"></textarea>
+        <button class="page-chip" data-act="pages" id="pageChip" hidden></button>
         <div class="note-meta" id="noteMeta"></div>
         <div class="tag-row" id="tagRow"></div>
         <div class="gallery" id="gallery"></div>
@@ -222,6 +224,7 @@
             <button class="ghost-btn" data-act="map-zoom-out">&#8722;</button>
             <button class="ghost-btn" data-act="map-zoom-in">&#43;</button>
             <button class="ghost-btn" data-act="map-fit">Fit</button>
+            <button class="ghost-btn" data-act="map-auto" id="autoBtn">Auto-arrange</button>
             <button class="ghost-btn" data-act="map-style-toggle" id="styleBtn">Style</button>
           </div>
           <div class="map-style">

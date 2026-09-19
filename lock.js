@@ -81,6 +81,9 @@
         bodyHtml: note.bodyHtml || '',
         items: note.items || [],
         map: note.map || { nodes: [], edges: [] },
+        // the other pages are part of the note, so they are locked with it
+        pages: note.pages || null,
+        page: note.page || null,
         images: pics.filter(Boolean)
       };
     });
@@ -125,6 +128,8 @@
           note.items = [];
           note.map = { nodes: [], edges: [] };
           note.images = [];
+          delete note.pages;
+          delete note.page;
           return DB.put('notes', note).then(function () {
             return Promise.all(imageIds.map(function (id) { return DB.del('images', id); }));
           }).then(function () { return note; });
@@ -167,6 +172,7 @@
         note.items = payload.items || [];
         note.map = payload.map || { nodes: [], edges: [] };
         note.images = pics.map(function (p) { return p.id; });
+        if (payload.pages) { note.pages = payload.pages; note.page = payload.page; }
         note.locked = false;
         delete note.enc;
         return DB.put('notes', note).then(function () { return note; });

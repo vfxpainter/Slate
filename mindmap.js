@@ -225,6 +225,7 @@
       type: EDGE_TYPES[st.type] ? st.type : DEF_EDGE.type,
       width: st.width || DEF_EDGE.width
     };
+    this.auto = !!st.auto;           // auto-arrange: nodes fall into place
     this.selected = null;
     this.selection = [];
     this.selectedEdge = null;
@@ -255,7 +256,9 @@
         if (e.w) o.w = e.w;
         return o;
       }),
-      style: { type: this.style.type, width: this.style.width }
+      style: this.auto
+        ? { type: this.style.type, width: this.style.width, auto: true }
+        : { type: this.style.type, width: this.style.width }
     };
   };
 
@@ -307,6 +310,7 @@
 
   Mindmap.prototype._changed = function () {
     this._prune();
+    if (this.auto) this.arrange();
     if (this.opts.onChange) this.opts.onChange();
     this.draw();
   };
@@ -781,6 +785,79 @@
     this.selectMany(made);
     this._changed();
     return made.length;
+  };
+
+  /* ---------- auto-arrange ----------
+     Free placement suits a small map; a big one needs order. With this on,
+     every change lays the map out as a tree growing to the right: children in
+     a column beside their parent, each branch given exactly the height it
+     needs, nothing overlapping however many nodes there are. Siblings keep the
+     order they are in on screen, so dragging one above another reorders it.
+     Turning it off leaves every node where it is, free to drag again. */
+  Mindmap.prototype.arrange = function () {
+    if (!this.nodes.length) return;
+    this._layout();                                    // sizes before positions
+    var byId = {}, kids = {}, hasParent = {};
+    this.nodes.forEach(function (n) { byId[n.id] = n; });
+    this.edges.forEach(function (e) {
+      if (!byId[e.a] || !byId[e.b]) return;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+      hasParent[e.b] = true;
+    });
+    var gx = Math.max(28, Math.round(this.gapX * 0.45));
+    var gy = Math.max(6, Math.round(this.gapY * 0.22));
+
+    // each node belongs to the first parent that reaches it; extra links stay links
+    var seen = {}, tree = {};
+    function build(id) {
+      seen[id] = true;
+      var own = [];
+      (kids[id] || []).forEach(function (c) {
+        if (!seen[c]) { seen[c] = true; own.push(c); }
+      });
+      tree[id] = own;
+      own.forEach(build);
+    }
+    var roots = this.nodes.filter(function (n) { return !hasParent[n.id]; })
+      .sort(function (a, b) { return a.y - b.y; });
+    roots.forEach(function (r) { if (!seen[r.id]) build(r.id); });
+    // anything only reachable round a loop starts a tree of its own
+    this.nodes.forEach(function (n) {
+      if (!seen[n.id]) { roots.push(n); build(n.id); }
+    });
+    Object.keys(tree).forEach(function (id) {
+      tree[id].sort(function (a, b) { return byId[a].y - byId[b].y; });
+    });
+
+    var band = {};
+    function height(id) {
+      var total = 0;
+      tree[id].forEach(function (c, i) { total += height(c) + (i ? gy : 0); });
+      band[id] = Math.max(byId[id].h, total);
+      return band[id];
+    }
+    function place(id, left, top) {
+      var n = byId[id];
+      n.x = left + n.w / 2;
+      n.y = top + band[id] / 2;
+      var total = 0;
+      tree[id].forEach(function (c, i) { total += band[c] + (i ? gy : 0); });
+      var y = n.y - total / 2, x = left + n.w + gx;
+      tree[id].forEach(function (c) { place(c, x, y); y += band[c] + gy; });
+    }
+    roots.forEach(function (r) { height(r.id); });
+    // the top tree stays where it is on screen; any others stack beneath it
+    var first = roots[0];
+    var left = first.x - first.w / 2, top = first.y - band[first.id] / 2;
+    roots.forEach(function (r) {
+      place(r.id, left, top);
+      top += band[r.id] + gy * 4;
+    });
+  };
+
+  Mindmap.prototype.setAuto = function (on) {
+    this.auto = !!on;
+    this._changed();
   };
 
   Mindmap.prototype.setSpacing = function (x, y) {
