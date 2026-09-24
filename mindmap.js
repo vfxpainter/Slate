@@ -434,14 +434,46 @@
     return lines;
   };
 
+  /* How far each node sits from the top of its branch. Used to draw a
+     parent a little larger than its children, the way a heading is larger
+     than the text under it. */
+  Mindmap.prototype._depthMap = function () {
+    var byId = {}, kids = {}, hasParent = {};
+    this.nodes.forEach(function (n) { byId[n.id] = n; });
+    this.edges.forEach(function (e) {
+      if (!byId[e.a] || !byId[e.b]) return;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+      hasParent[e.b] = true;
+    });
+    var depth = {}, queue = [];
+    this.nodes.forEach(function (n) {
+      if (!hasParent[n.id]) { depth[n.id] = 0; queue.push(n.id); }
+    });
+    if (!queue.length && this.nodes.length) {
+      depth[this.nodes[0].id] = 0;
+      queue.push(this.nodes[0].id);
+    }
+    var guard = 0;
+    while (queue.length && guard++ < 6000) {
+      var id = queue.shift();
+      (kids[id] || []).forEach(function (c) {
+        if (depth[c] === undefined) { depth[c] = depth[id] + 1; queue.push(c); }
+      });
+    }
+    return depth;
+  };
+
   Mindmap.prototype._layout = function () {
     var ctx = this.ctx;
+    var depth = this._depthMap();
     for (var i = 0; i < this.nodes.length; i++) {
       var n = this.nodes[i];
       var shape = SHAPES[n.shape] || SHAPES.round;
 
-      // a node can carry its own size, for emphasis
-      n._fs = n.fs || this.fontSize;
+      // a node can carry its own size; otherwise its place in the branch decides
+      var d = depth[n.id];
+      var grade = d === 0 ? 1.18 : d === 1 ? 1.02 : 0.92;
+      n._fs = n.fs || Math.max(10, Math.round(this.fontSize * grade));
       n._lh = lineHeightFor(n._fs);
       ctx.font = n._fs + 'px ' + this.fontStack;
 
@@ -1518,6 +1550,21 @@
       }
 
       var n = self.hit(p.x, p.y);
+      /* A finger cannot hover, so the dots would otherwise stay on whichever
+         node the pointer passed over last -- which read as the controls being
+         stuck on the node you selected before. */
+      if (e.pointerType !== 'mouse') self._hover = n;
+
+      // held still on a node: its menu, the same one the right button gives
+      if (n && e.pointerType !== 'mouse' && self.opts.onNodeMenu) {
+        clearTimeout(self._pressTimer);
+        self._pressTimer = setTimeout(function () {
+          self._pressTimer = null;
+          self._drag = null;
+          self.select(n);
+          self.opts.onNodeMenu(n, e.clientX, e.clientY);
+        }, 500);
+      }
 
       if (self.linkMode) {
         if (n) {
@@ -1637,6 +1684,12 @@
         self.draw();
         return;
       }
+      if (self._pressTimer &&
+          Math.hypot(lp0.x - (self._drag ? self._drag.sx : lp0.x),
+                     lp0.y - (self._drag ? self._drag.sy : lp0.y)) > 10) {
+        clearTimeout(self._pressTimer);
+        self._pressTimer = null;
+      }
       if (!self._drag) return;
       var p = self._localPoint(e);
       if (self._drag.pan) {
@@ -1659,6 +1712,8 @@
     var lastTap = 0, lastNode = null;
 
     function endPointer(e) {
+      clearTimeout(self._pressTimer);
+      self._pressTimer = null;
       if (self._marquee) {
         self._marquee = null;
         self._pointers.delete(e.pointerId);
@@ -1728,6 +1783,16 @@
       if (self._drag && self._drag.moved) self._changed();
       if (self._pointers.size === 0) self._drag = null;
     }
+    c.addEventListener('contextmenu', function (e) {
+      if (!self.opts.onNodeMenu) return;
+      var p = self._localPoint(e);
+      var n = self.hit(p.x, p.y);
+      e.preventDefault();
+      if (!n) return;
+      self.select(n);
+      self.opts.onNodeMenu(n, e.clientX, e.clientY);
+    });
+
     c.addEventListener('pointerup', endPointer);
     c.addEventListener('pointercancel', endPointer);
 

@@ -3373,8 +3373,9 @@ function toggleImgFree() {
 
     // colour and delete work on any number; rename, child and image need one
     ['map-child', 'map-rename', 'map-image'].forEach(function (a) {
-      var elx = document.querySelector('[data-act="' + a + '"]');
-      if (elx) elx.classList.toggle('dimmed', !one);
+      Array.prototype.forEach.call(document.querySelectorAll('[data-act="' + a + '"]'), function (elx) {
+        elx.classList.toggle('dimmed', !one);
+      });
     });
     $('mapColors').classList.toggle('dimmed', !any);
 
@@ -3476,6 +3477,25 @@ function toggleImgFree() {
     });
   }
 
+  /* The menu for one node: the right button on a desktop, a long press on a
+     phone. It opens where you pressed, and closes as soon as you pick
+     something or tap elsewhere. */
+  function showNodeMenu(x, y) {
+    var m = $('nodeMenu');
+    if (!m) return;
+    closeMenus();
+    m.hidden = false;
+    var r = m.getBoundingClientRect();
+    var maxX = window.innerWidth - r.width - 8;
+    var maxY = window.innerHeight - r.height - 8;
+    m.style.left = Math.max(8, Math.min(x, maxX)) + 'px';
+    m.style.top = Math.max(8, Math.min(y, maxY)) + 'px';
+    if (!m.dataset.wired) {
+      m.dataset.wired = '1';
+      m.addEventListener('click', function () { m.hidden = true; });
+    }
+  }
+
   function mountMap() {
     var canvas = $('mapCanvas');
     if (!S.map) {
@@ -3513,6 +3533,7 @@ function toggleImgFree() {
           else if (result === 'cancelled') toast('Link cancelled');
         },
         onSelect: function (node) { renderMapTools(node); },
+        onNodeMenu: function (node, x, y) { showNodeMenu(x, y); },
         onEdgeSelect: function () { renderMapTools(S.map.selected); },
         onSelectModeChange: function (on) {
           $('selModeBtn').classList.toggle('on', on);

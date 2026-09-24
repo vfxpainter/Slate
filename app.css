@@ -2646,3 +2646,40 @@ body.dragging-note .note-scroll { touch-action: none; }
   user-select: none;
   -webkit-touch-callout: none;
 }
+
+/* the menu for a single mindmap node */
+.node-menu {
+  position: fixed;
+  right: auto;               /* .menu pins itself to the right; this one follows the finger */
+  z-index: 90;
+  min-width: 11rem;
+}
+
+/* ---- the quick buttons under a mindmap ---- */
+.map-quick {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: .4rem;
+  z-index: 5;
+  max-width: calc(100% - 1rem);
+}
+.quick-btn {
+  background: var(--pane);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .5rem .95rem;
+  font-size: .88rem;
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.quick-btn:hover { border-color: var(--accent); color: var(--accent); }
+.quick-btn:active { transform: translateY(1px); }
+.quick-btn.dimmed { opacity: .45; }
+@media (max-width: 900px) {
+  .map-quick { bottom: 12px; gap: .35rem; }
+  .quick-btn { padding: .6rem 1rem; font-size: .92rem; }
+}

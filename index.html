@@ -124,6 +124,14 @@
       <button class="icon-btn" data-act="toggle-full" id="fullBtn"
               title="Full screen (Esc to leave)">&#11036;</button>
       <button class="icon-btn" data-act="note-menu" title="More">&#8942;</button>
+      <div class="menu node-menu" id="nodeMenu" hidden>
+        <button data-act="map-rename"><b>Edit text</b></button>
+        <button data-act="map-child"><b>Add child</b></button>
+        <button data-act="map-copy"><b>Copy</b></button>
+        <button data-act="map-paste"><b>Paste</b></button>
+        <button data-act="map-duplicate"><b>Duplicate</b></button>
+        <button data-act="map-del" class="danger"><b>Delete</b></button>
+      </div>
       <div class="menu menu-right" id="noteMenu" hidden>
         <button data-act="pin"><b>Pin / unpin</b></button>
         <button data-act="move"><b>Move to folder…</b></button>
@@ -273,6 +281,12 @@
           <div class="map-canvas-wrap">
             <canvas id="mapCanvas"></canvas>
             <textarea id="mapInlineEdit" class="map-inline" spellcheck="false" hidden></textarea>
+            <!-- the everyday buttons, where a thumb can reach them -->
+            <div class="map-quick" id="mapQuick">
+              <button class="quick-btn" data-act="map-child">&#43; Child</button>
+              <button class="quick-btn" data-act="map-add">&#43; Node</button>
+              <button class="quick-btn" data-act="map-rename">&#9998; Edit</button>
+            </div>
           </div>
         </div>
       </div>
