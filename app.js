@@ -41,6 +41,11 @@
     tab: 'text',          // text | list | mindmap | more -- the tab you are on
     tabViews: {},         // tab -> the folder you were last in there
     listScroll: 0,        // where the grid was scrolled when a note opened
+    draftId: null,        // a new note, not saved until you put something in it
+    hitQuery: '',         // the word to mark inside the note you opened
+    hits: [],             // where it appears
+    hitAt: 0,
+    tabView: {},          // tab -> tiles | list | outline
     folderDeep: false,    // a folder shows its own notes, not its children's
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
@@ -245,6 +250,10 @@
     if (pw === 'reading' || pw === 'wide' || pw === 'full') S.pageWidth = pw;
     var lay = localStorage.getItem('slate-layout');
     if (lay === 'tabs' || lay === 'classic') S.layout = lay;
+    try {
+      var tvm = JSON.parse(localStorage.getItem('slate-tabview') || 'null');
+      if (tvm && typeof tvm === 'object') S.tabView = tvm;
+    } catch (e) { /* back to tiles */ }
     var tb = localStorage.getItem('slate-tab');
     if (tb === 'text' || tb === 'list' || tb === 'mindmap' || tb === 'more') S.tab = tb;
     try {
@@ -665,6 +674,26 @@
     return Promise.all(stale.map(function (n) { return DB.del('notes', n.id); }));
   }
 
+  /* The word to mark: a plain search, not a "tag:" one. */
+  function plainQuery() {
+    var q = (S.q || '').trim();
+    if (!q || /^tag:/i.test(q)) return '';
+    return q;
+  }
+
+  function markText(node, text, q) {
+    if (!q) { node.textContent = text; return node; }
+    var low = String(text).toLowerCase(), needle = q.toLowerCase(), at = 0, i;
+    node.textContent = '';
+    while ((i = low.indexOf(needle, at)) !== -1) {
+      if (i > at) node.appendChild(document.createTextNode(text.slice(at, i)));
+      node.appendChild(el('mark', 'hit', text.substr(i, needle.length)));
+      at = i + needle.length;
+    }
+    node.appendChild(document.createTextNode(text.slice(at)));
+    return node;
+  }
+
   function searchText(n) {
     if (n.locked) return ((n.title || '') + ' ' + tagsOf(n).join(' ')).toLowerCase();
     var parts = [n.title || '', n.body || '', tagsOf(n).join(' ')];
@@ -761,6 +790,14 @@
     if (!S.note) return Promise.resolve();
     var n = S.note;
     closeBurst();
+    if (S.draftId === n.id) {
+      if (isBlankNote(n)) { renderList(); return Promise.resolve(); }
+      return commitDraft().then(function () {
+        renderList();
+        renderMeta();
+        renderUndoButtons();
+      });
+    }
     return DB.put('notes', n).then(function () {
       renderList();
       renderMeta();
@@ -1013,12 +1050,12 @@
       kindEl.title = n.locked ? 'Locked note' :
         (n.type === 'list' ? 'List' : n.type === 'mindmap' ? 'Mindmap' : 'Note');
       top.appendChild(kindEl);
-      top.appendChild(el('span', 'card-title', displayTitle(n)));
+      top.appendChild(markText(el('span', 'card-title'), displayTitle(n), plainQuery()));
       if (n.pinned && S.view !== 'trash') top.appendChild(el('span', 'card-pin', '⚑'));
       c.appendChild(top);
 
       var sn = snippet(n);
-      if (sn) c.appendChild(el('div', 'card-snip', sn));
+      if (sn) c.appendChild(markText(el('div', 'card-snip'), sn, plainQuery()));
 
       var foot = el('div', 'card-foot');
       foot.appendChild(el('span', 'card-date', fmtDate(n.updatedAt)));
@@ -1071,6 +1108,124 @@
     mindmap: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="5.5" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="18" cy="18.5" r="2.2"/><path d="M8.5 12h7.3M8.2 10.8 15.8 6.3M8.2 13.2l7.6 4.5"/></svg>',
     more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>'
   };
+
+  var TAB_VIEWS = ['tiles', 'list', 'outline'];
+  var TAB_VIEW_NAME = { tiles: 'Tiles', list: 'List', outline: 'Outline' };
+
+  function tabViewMode() {
+    var m = S.tabView[S.tab];
+    return TAB_VIEWS.indexOf(m) === -1 ? 'tiles' : m;
+  }
+
+  function setTabView(mode) {
+    S.tabView[S.tab] = mode;
+    try { localStorage.setItem('slate-tabview', JSON.stringify(S.tabView)); }
+    catch (e) { /* private mode */ }
+    renderList();
+    $('noteList').scrollTop = 0;
+  }
+
+  function notesDirectlyIn(folderId, kind) {
+    return liveNotes().filter(function (n) {
+      return kindOf(n) === kind && (n.folderId || null) === (folderId || null);
+    }).sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+  }
+
+  function countKindIn(folderId, kind) {
+    var ids = subtreeIds(folderId);
+    return liveNotes().filter(function (n) {
+      return kindOf(n) === kind && ids.indexOf(n.folderId) !== -1;
+    }).length;
+  }
+
+  // folders as plain rows, for the list view
+  function renderFolderList(wrap) {
+    if (S.q) return 0;
+    var kind = S.tab, here = folderById(S.view) ? S.view : null;
+    var kids = childFolders(here).filter(function (f) { return folderFits(f, kind); })
+      .sort(function (a, b) {
+        return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.name.localeCompare(b.name);
+      });
+    var strip = el('div', 'folder-strip');
+    kids.forEach(function (f) {
+      var row = el('button', 'folder-row' + (childFolders(f.id).length ? ' has-kids' : ''));
+      row.dataset.view = f.id;
+      row.appendChild(el('span', 'fr-ico', f.pinned ? '⚑' : '▢'));
+      row.appendChild(el('span', 'fr-name', f.name));
+      row.appendChild(el('span', 'fr-n', String(countKindIn(f.id, kind))));
+      var dot = el('span', 'fr-dot', '⋮');
+      dot.dataset.folderMenu = f.id;
+      dot.title = 'Folder options';
+      row.appendChild(dot);
+      strip.appendChild(row);
+    });
+    var add = el('button', 'folder-row add');
+    add.dataset.act = here ? 'new-subfolder-here' : 'new-folder';
+    add.appendChild(el('span', 'fr-ico', '＋'));
+    add.appendChild(el('span', 'fr-name', 'New folder'));
+    strip.appendChild(add);
+    wrap.appendChild(strip);
+    return kids.length;
+  }
+
+  /* ---------- the outline ----------
+     Every folder in the tab on one scrolling page, each one openable in place
+     to show what is inside it. Best when you have many folders and want to
+     jump about; the tiles are better when you want to see previews. */
+  function outlineNoteRow(n, depth) {
+    var row = el('button', 'ol-note');
+    row.style.setProperty('--d', String(depth));
+    row.dataset.noteId = n.id;
+    row.appendChild(el('span', 'card-kind k-' + (n.locked ? 'locked' : n.type),
+      n.locked ? '🔒' : (KIND[n.type] || KIND.text)));
+    row.appendChild(markText(el('span', 'ol-title'), displayTitle(n), plainQuery()));
+    row.appendChild(el('span', 'ol-date', fmtDate(n.updatedAt)));
+    return row;
+  }
+
+  function renderOutline(wrap) {
+    var kind = S.tab;
+    var box = el('div', 'outline');
+    var any = false;
+    (function walk(parentId, depth) {
+      childFolders(parentId).filter(function (f) { return folderFits(f, kind); })
+        .sort(function (a, b) {
+          return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.name.localeCompare(b.name);
+        })
+        .forEach(function (f) {
+          any = true;
+          var open = !!S.expanded[f.id];
+          var row = el('button', 'ol-row' + (open ? ' open' : ''));
+          row.style.setProperty('--d', String(depth));
+          row.dataset.olFolder = f.id;
+          row.dataset.view = f.id;          // so a dragged note can be dropped on it
+          row.appendChild(el('span', 'ol-tw', '▸'));
+          row.appendChild(el('span', 'ol-name', f.name));
+          row.appendChild(el('span', 'ol-n', '(' + countKindIn(f.id, kind) + ')'));
+          var dots = el('span', 'ol-dots', '⋮');
+          dots.dataset.folderMenu = f.id;
+          dots.title = 'Folder options';
+          row.appendChild(dots);
+          box.appendChild(row);
+          if (open) {
+            walk(f.id, depth + 1);
+            notesDirectlyIn(f.id, kind).forEach(function (n) {
+              box.appendChild(outlineNoteRow(n, depth + 1));
+            });
+          }
+        });
+    })(null, 0);
+
+    notesDirectlyIn(null, kind).forEach(function (n) { box.appendChild(outlineNoteRow(n, 0)); });
+    if (!box.childElementCount) {
+      box.appendChild(el('div', 'list-empty', 'Nothing here yet.'));
+    }
+    var add = el('button', 'ol-add');
+    add.dataset.act = 'new-folder';
+    add.textContent = '＋ New folder';
+    box.appendChild(add);
+    wrap.appendChild(box);
+  }
 
   function renderTabBar() {
     var bar = $('tabBar');
@@ -1277,7 +1432,17 @@
       wrap.appendChild(bar);
     }
 
-    var folders = isKindTab(S.tab) ? renderFolderTiles(wrap) : 0;
+    var mode = tabViewMode();
+    $('app').dataset.tabview = mode;
+    if (mode === 'outline' && isKindTab(S.tab) && !S.q) {
+      renderOutline(wrap);
+      wrap.scrollTop = keepScroll;
+      saveTabState();
+      return;
+    }
+    var folders = isKindTab(S.tab)
+      ? (mode === 'list' ? renderFolderList(wrap) : renderFolderTiles(wrap))
+      : 0;
     var notes = visibleNotes();
     if (!notes.length && !folders) {
       wrap.appendChild(el('div', 'list-empty',
@@ -1377,6 +1542,7 @@
 
   var noteDragState = null;
   var suppressClick = false;
+  var pressDrag = { timer: null, x: 0, y: 0, id: 0 };
 
   function dropTargetAt(x, y) {
     var hit = document.elementFromPoint(x, y);
@@ -1658,6 +1824,7 @@
 
   function openNote(id) {
     flush();
+    if (S.draftId && S.draftId !== id) discardDraft();
     var n = byNoteId(id);
     S.note = n;
     if (!n) { showEmpty(); return; }
@@ -1702,6 +1869,108 @@
 
     renderList();
     renderUndoButtons();
+    setTimeout(function () { if (S.note && S.note.id === id) markHits(S.hitQuery); }, 30);
+  }
+
+  /* ---------- the searched word, inside the note ----------
+     Marked without touching what is stored: a browser highlight over ranges
+     for prose, a flash on the row for a list item, and the node itself for a
+     mindmap. Where the browser has no highlight API nothing is marked, and
+     the jump to the first match still works. */
+  function clearHits() {
+    S.hits = [];
+    S.hitAt = 0;
+    S.hitQuery = '';
+    if (window.CSS && CSS.highlights) CSS.highlights.delete('sulat-hit');
+    Array.prototype.forEach.call(document.querySelectorAll('.row.hit-row'), function (r) {
+      r.classList.remove('hit-row');
+    });
+    var bar = $('hitBar');
+    if (bar) bar.hidden = true;
+  }
+
+  function textRanges(root, q) {
+    var out = [], needle = q.toLowerCase();
+    var walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walk.nextNode())) {
+      var low = (node.nodeValue || '').toLowerCase(), at = 0, i;
+      while ((i = low.indexOf(needle, at)) !== -1) {
+        var r = document.createRange();
+        r.setStart(node, i);
+        r.setEnd(node, i + needle.length);
+        out.push(r);
+        at = i + needle.length;
+      }
+    }
+    return out;
+  }
+
+  function markHits(q) {
+    clearHits();
+    var n = S.note;
+    if (!q || !n || n.locked) return;
+    S.hitQuery = q;
+
+    if (n.type === 'mindmap' && S.map) {
+      var low = q.toLowerCase();
+      S.hits = S.map.nodes.filter(function (nd) {
+        return String(nd.text || '').toLowerCase().indexOf(low) !== -1;
+      });
+      if (!S.hits.length) return;
+      showHit(0);
+      return;
+    }
+
+    if (n.type === 'list') {
+      var lowQ = q.toLowerCase();
+      S.hits = Array.prototype.filter.call($('listItems').querySelectorAll('.row'), function (row) {
+        var ta = row.querySelector('.txt');
+        return ta && String(ta.value || '').toLowerCase().indexOf(lowQ) !== -1;
+      });
+      if (!S.hits.length) return;
+      showHit(0);
+      return;
+    }
+
+    var rich = $('noteRich');
+    if (!rich) return;
+    S.hits = textRanges(rich, q);
+    if (!S.hits.length) return;
+    if (window.CSS && CSS.highlights && window.Highlight) {
+      try {
+        var hl = new Highlight();
+        S.hits.forEach(function (r) { hl.add(r); });
+        CSS.highlights.set('sulat-hit', hl);
+      } catch (e) { /* older browser: the jump still works */ }
+    }
+    showHit(0);
+  }
+
+  function showHit(i) {
+    if (!S.hits.length) return;
+    S.hitAt = (i + S.hits.length) % S.hits.length;
+    var hit = S.hits[S.hitAt];
+    if (S.note && S.note.type === 'mindmap' && S.map) {
+      S.map.select(hit);
+      S.map.reveal(hit);
+    } else if (S.note && S.note.type === 'list') {
+      Array.prototype.forEach.call(document.querySelectorAll('.row.hit-row'), function (r) {
+        r.classList.remove('hit-row');
+      });
+      hit.classList.add('hit-row');
+      hit.scrollIntoView({ block: 'center' });
+    } else {
+      var r = hit.getBoundingClientRect();
+      var box = $('editorScroll');
+      box.scrollTop += r.top - box.getBoundingClientRect().top - box.clientHeight / 3;
+    }
+    var bar = $('hitBar');
+    if (bar) {
+      bar.hidden = false;
+      $('hitCount').textContent = (S.hitAt + 1) + ' of ' + S.hits.length +
+        ' \u00b7 \u201c' + S.hitQuery + '\u201d';
+    }
   }
 
   /* With no note open, the editor used to say only "Pick a note". When a
@@ -1764,6 +2033,8 @@
   }
 
   function showEmpty() {
+    clearHits();
+    discardDraft();
     S.note = null;
     S.mapNoteId = null;
     // clear the fields too, so nothing stale is left behind the empty state
@@ -1775,6 +2046,53 @@
     $('editorBody').hidden = true;
     renderList();
     renderUndoButtons();
+  }
+
+  /* Nothing typed, nothing pasted, nothing ticked: the note you opened by
+     mistake. A fresh mindmap's single "Start here" node counts as nothing,
+     since the app put it there, not you. */
+  function isBlankNote(n) {
+    if (!n || n.locked) return false;
+    if ((n.title || '').trim()) return false;
+    if ((n.body || '').trim()) return false;
+    if (String(n.bodyHtml || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').trim()) return false;
+    if ((n.images || []).length) return false;
+    if ((n.tags || []).length) return false;
+    if ((n.items || []).some(function (i) { return (i.text || '').trim(); })) return false;
+    if ((n.pages || []).length > 1) return false;
+    var nodes = (n.map && n.map.nodes) || [];
+    if (nodes.length > 1) return false;
+    if (nodes.length === 1 && (nodes[0].text || '').trim() !== 'Start here') return false;
+    return true;
+  }
+
+  // the first thing you put in it is what saves it
+  function commitDraft() {
+    var id = S.draftId;
+    if (!id) return Promise.resolve();
+    var n = byNoteId(id);
+    if (!n || isBlankNote(n)) return Promise.resolve();
+    S.draftId = null;
+    History.push('New ' + (n.type === 'mindmap' ? 'mindmap' : n.type),
+      [History.rec('notes', id, null)], [History.rec('notes', id, n)]);
+    renderUndoButtons();
+    return DB.put('notes', n);
+  }
+
+  // left without a word in it: drop it, with nothing in Trash or undo to clear up
+  function discardDraft() {
+    var id = S.draftId;
+    if (!id) return false;
+    var n = byNoteId(id);
+    if (!n || !isBlankNote(n)) return false;
+    S.draftId = null;
+    S.notes = S.notes.filter(function (x) { return x.id !== id; });
+    if (S.note && S.note.id === id) { S.note = null; S.mapNoteId = null; }
+    try {
+      if (localStorage.getItem('slate-last') === id) localStorage.removeItem('slate-last');
+    } catch (e) { /* private mode */ }
+    DB.del('notes', id);
+    return true;
   }
 
   function newNote(type) {
@@ -1789,10 +2107,9 @@
     if (S.view === 'pinned') n.pinned = true;
 
     (made.length ? DB.putMany('folders', made) : Promise.resolve()).then(function () {
-      return act('New ' + (type === 'mindmap' ? 'mindmap' : type), noteRefs([n.id]), function () {
-        S.notes.push(n);
-      });
-    }).then(function () {
+      discardDraft();                 // only ever one unsaved new note at a time
+      S.notes.push(n);
+      S.draftId = n.id;
       renderTree();
       renderUndoButtons();
       openNote(n.id);
@@ -4677,6 +4994,7 @@ function toggleImgFree() {
     'nav-close': function () { delete $('app').dataset.nav; },
     'editor-back': function () {
       flush();
+      if (discardDraft()) renderTree();
       $('app').dataset.pane = 'list';
       // back to the folder you came from, scrolled to where you were
       if (S.layout === 'tabs') {
@@ -4712,6 +5030,9 @@ function toggleImgFree() {
       $('noteList').scrollTop = 0;
     },
     'new-here': function () { newNote(currentKind()); },
+    'hit-next': function () { showHit(S.hitAt + 1); },
+    'hit-prev': function () { showHit(S.hitAt - 1); },
+    'hit-clear': function () { clearHits(); },
     'tree-kind': function (e, t) {
       S.tab = t.dataset.kind;
       var f = folderById(S.view);
@@ -4748,6 +5069,13 @@ function toggleImgFree() {
     },
 
     'cycle-view': function () {
+      if (S.layout === 'tabs') {
+        var at = TAB_VIEWS.indexOf(tabViewMode());
+        var next = TAB_VIEWS[(at + 1) % TAB_VIEWS.length];
+        setTabView(next);
+        toast(TAB_VIEW_NAME[next]);
+        return;
+      }
       var i = VIEW_MODES.indexOf(S.viewMode);
       setViewMode(VIEW_MODES[(i + 1) % VIEW_MODES.length]);
       toast('View: ' + S.viewMode);
@@ -5590,6 +5918,14 @@ function toggleImgFree() {
       var fm = t.closest('[data-folder-menu]');
       if (fm) { e.stopPropagation(); folderMenuDialog(fm.dataset.folderMenu); return; }
 
+      var ol = t.closest('[data-olFolder], [data-ol-folder]');
+      if (ol) {
+        var fid = ol.dataset.olFolder;
+        S.expanded[fid] = !S.expanded[fid];
+        renderList();
+        return;
+      }
+
       var tw = t.closest('[data-twist]');
       if (tw) {
         e.stopPropagation();
@@ -5643,6 +5979,7 @@ function toggleImgFree() {
       var card = t.closest('[data-note-id]');
       if (card) {
         var id = card.dataset.noteId;
+        S.hitQuery = plainQuery();
         /* Clicking a card always opens it.
 
            It used to toggle the tick instead whenever selection mode happened
@@ -5997,12 +6334,47 @@ function toggleImgFree() {
       if (e.button != null && e.button !== 0) return;
       var grip = e.target.closest('[data-note-grip]');
       var card = e.target.closest('[data-note-id]');
-      if (!grip && !(card && e.pointerType === 'mouse')) return;
       if (!card) return;
+      if (e.target.closest('[data-pickNote], [data-pick-note], [data-binNote], [data-bin-note]')) return;
       var id = card.dataset.noteId;
       // dragging one of the selected cards drags the whole selection
       var ids = (S.selecting && S.picked[id]) ? pickedIds() : [id];
-      beginNoteDrag(e, ids);
+
+      if (grip || e.pointerType === 'mouse') { beginNoteDrag(e, ids); return; }
+
+      /* A finger has no grip to aim at and the list has to stay scrollable,
+         so a press that stays put for a moment becomes a drag. Moving before
+         then is a scroll and cancels it. */
+      var sx = e.clientX, sy = e.clientY, pid = e.pointerId;
+      clearTimeout(pressDrag.timer);
+      pressDrag = {
+        x: sx, y: sy, id: pid,
+        timer: setTimeout(function () {
+          if (noteDragState) return;
+          beginNoteDrag({ pointerId: pid, clientX: sx, clientY: sy }, ids);
+          noteDragMove({
+            pointerId: pid, clientX: sx + 9, clientY: sy + 9,
+            preventDefault: function () { /* nothing to cancel here */ }
+          });
+          if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { /* ignore */ } }
+          toast('Drop it on a folder');
+        }, 420)
+      };
+    });
+
+    document.addEventListener('pointermove', function (e) {
+      if (!pressDrag.timer || e.pointerId !== pressDrag.id) return;
+      if (Math.hypot(e.clientX - pressDrag.x, e.clientY - pressDrag.y) > 10) {
+        clearTimeout(pressDrag.timer);
+        pressDrag.timer = null;
+      }
+    }, true);
+
+    ['pointerup', 'pointercancel'].forEach(function (ev) {
+      document.addEventListener(ev, function () {
+        clearTimeout(pressDrag.timer);
+        pressDrag.timer = null;
+      }, true);
     });
     document.addEventListener('pointermove', noteDragMove);
     document.addEventListener('pointerup', endNoteDrag);

@@ -2522,3 +2522,106 @@ select option {
 .pg-n { flex: 0 0 auto; width: 1.5rem; text-align: center; font-size: .75rem; color: var(--ink-3); }
 .page-row .icon-btn { width: 30px; height: 30px; font-size: .85rem; }
 .page-row .icon-btn:disabled { opacity: .3; }
+
+/* ---- selected text ----
+   The old tint was so pale you could not tell what you had picked. */
+::selection { background: var(--accent); color: #fff; }
+:root[data-theme="dark"] ::selection { background: var(--accent); color: #1d1509; }
+.note-rich ::selection, .note-title::selection, .list-editor ::selection,
+.map-inline::selection { background: var(--accent); color: #fff; }
+:root[data-theme="dark"] .note-rich ::selection,
+:root[data-theme="dark"] .note-title::selection,
+:root[data-theme="dark"] .list-editor ::selection,
+:root[data-theme="dark"] .map-inline::selection { background: var(--accent); color: #1d1509; }
+
+/* ---- the bin on a card: a real touch target on a phone ---- */
+@media (max-width: 900px) {
+  .card-bin { width: 40px; height: 40px; margin-left: .5rem; opacity: .9; }
+  .card-bin svg { width: 22px; height: 22px; }
+  .card-check { width: 30px; height: 30px; }
+}
+
+/* ---- the word you searched for ---- */
+mark.hit {
+  background: #ffe08a;
+  color: #2b2109;
+  border-radius: 3px;
+  padding: 0 .1em;
+}
+:root[data-theme="dark"] mark.hit { background: #8a6d1f; color: #fff6dd; }
+::highlight(sulat-hit) { background: #ffe08a; color: #2b2109; }
+:root[data-theme="dark"] ::highlight(sulat-hit) { background: #8a6d1f; color: #fff6dd; }
+.row.hit-row .txt { background: #ffe08a33; border-radius: 4px; }
+
+.hit-bar {
+  display: flex;
+  align-items: center;
+  gap: .2rem;
+  padding: .25rem .5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--pane-2);
+  font-size: .78rem;
+  color: var(--ink-2);
+}
+.hit-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hit-bar .icon-btn { width: 30px; height: 30px; font-size: .9rem; }
+@media (max-width: 900px) {
+  .hit-bar .icon-btn { width: 36px; height: 36px; }
+}
+
+/* ==========================================================================
+   Tiles, list, outline
+   ========================================================================== */
+
+/* ---- list: folders as rows, notes as one line each ---- */
+.app[data-tabview="list"] .note-scroll { display: block; }
+.app[data-tabview="list"] .card {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .45rem .55rem;
+  min-height: 0;
+}
+.app[data-tabview="list"] .card-top { flex: 1; min-width: 0; margin: 0; }
+.app[data-tabview="list"] .card-snip,
+.app[data-tabview="list"] .card-thumbs { display: none; }
+.app[data-tabview="list"] .card-foot { flex: 0 0 auto; margin: 0; border: 0; padding: 0; }
+.app[data-tabview="list"] .card-tag,
+.app[data-tabview="list"] .card-folder { display: none; }
+
+/* ---- outline: one page, folders you open in place ---- */
+.outline { padding: .2rem .1rem 2rem; }
+.ol-row, .ol-note {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  width: 100%;
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+  padding: .62rem .5rem;
+  padding-left: calc(.5rem + var(--d, 0) * 1.1rem);
+  color: var(--ink);
+  font-size: .95rem;
+}
+.ol-row:hover, .ol-note:hover { background: var(--sel); }
+.ol-row { font-weight: 600; }
+.ol-tw { flex: 0 0 .8rem; color: var(--ink-3); transition: transform .14s; }
+.ol-row.open .ol-tw { transform: rotate(90deg); }
+.ol-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ol-n { flex: 0 0 auto; color: var(--ink-3); font-size: .8rem; font-weight: 400; }
+.ol-dots { flex: 0 0 auto; padding: 0 .25rem; color: var(--ink-3); }
+.ol-note { font-weight: 400; color: var(--ink-2); }
+.ol-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ol-date { flex: 0 0 auto; font-size: .74rem; color: var(--ink-3); }
+.ol-add { display: block; width: 100%; text-align: left; padding: .7rem .5rem; color: var(--ink-3); }
+.ol-add:hover { color: var(--accent); }
+@media (max-width: 900px) {
+  .ol-row, .ol-note { padding-top: .8rem; padding-bottom: .8rem; font-size: 1rem; }
+  .ol-dots { padding: 0 .5rem; }
+}
+
+/* a folder you are about to drop a note on, wherever it is shown */
+.ol-row.drop-target,
+.more-row.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+/* while a drag is running, nothing else reacts to the finger */
+body.dragging-note .card, body.dragging-note .ftile { touch-action: none; }

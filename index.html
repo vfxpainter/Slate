@@ -138,6 +138,12 @@
         <button data-act="purge" class="danger hidden-item"><b>Delete forever</b></button>
       </div>
     </header>
+    <div class="hit-bar" id="hitBar" hidden>
+      <span id="hitCount"></span>
+      <button class="icon-btn" data-act="hit-prev" title="Previous match" aria-label="Previous match">&#8593;</button>
+      <button class="icon-btn" data-act="hit-next" title="Next match" aria-label="Next match">&#8595;</button>
+      <button class="icon-btn" data-act="hit-clear" title="Stop highlighting" aria-label="Stop highlighting">&#10005;</button>
+    </div>
     <div class="editor-scroll" id="editorScroll">
       <div class="empty-state" id="emptyState">
         <div class="empty-mark">&#9634;</div>
