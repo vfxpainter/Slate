@@ -671,8 +671,7 @@
      removed rather than put in Trash, because there is nothing to keep. */
   function sweepBlankNotes() {
     var stale = S.notes.filter(function (n) {
-      return !n.deletedAt && !n.locked && isBlankNote(n) &&
-        Math.abs((n.updatedAt || 0) - (n.createdAt || 0)) < 2000;
+      return !n.deletedAt && !n.locked && isBlankNote(n);
     });
     if (!stale.length) return Promise.resolve(0);
     var ids = stale.map(function (n) { return n.id; });
@@ -1883,8 +1882,10 @@
   }
 
   function openNote(id) {
+    var leaving = S.note && S.note.id !== id ? S.note : null;
     flush();
     if (S.draftId && S.draftId !== id) discardDraft();
+    if (leaving) dropIfBlank(leaving);
     var n = byNoteId(id);
     S.note = n;
     if (!n) { showEmpty(); return; }
@@ -2095,6 +2096,7 @@
   function showEmpty() {
     clearHits();
     discardDraft();
+    dropIfBlank(S.note);
     S.note = null;
     S.mapNoteId = null;
     // clear the fields too, so nothing stale is left behind the empty state
@@ -2127,6 +2129,20 @@
   }
 
   // the first thing you put in it is what saves it
+  /* Left with nothing in it -- everything typed then deleted again -- is the
+     same as never having written anything, so it goes when you leave it.
+     Through act(), so Ctrl+Z brings it straight back. */
+  function dropIfBlank(n) {
+    if (!n || n.deletedAt || n.locked) return false;
+    if (S.draftId === n.id) return false;          // never saved: discardDraft handles it
+    if (!byNoteId(n.id) || !isBlankNote(n)) return false;
+    var id = n.id;
+    act('Remove empty note', noteRefs([id]), function () {
+      S.notes = S.notes.filter(function (x) { return x.id !== id; });
+    });
+    return true;
+  }
+
   function commitDraft() {
     var id = S.draftId;
     if (!id) return Promise.resolve();
@@ -5055,6 +5071,7 @@ function toggleImgFree() {
     'editor-back': function () {
       flush();
       if (discardDraft()) renderTree();
+      else if (dropIfBlank(S.note)) { S.note = null; renderTree(); }
       $('app').dataset.pane = 'list';
       // back to the folder you came from, scrolled to where you were
       if (S.layout === 'tabs') {
