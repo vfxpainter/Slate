@@ -666,6 +666,24 @@
     });
   }
 
+  /* Notes from before Sulat stopped saving untouched ones: nothing in them
+     at all, and never edited after the moment they were made. They are
+     removed rather than put in Trash, because there is nothing to keep. */
+  function sweepBlankNotes() {
+    var stale = S.notes.filter(function (n) {
+      return !n.deletedAt && !n.locked && isBlankNote(n) &&
+        Math.abs((n.updatedAt || 0) - (n.createdAt || 0)) < 2000;
+    });
+    if (!stale.length) return Promise.resolve(0);
+    var ids = stale.map(function (n) { return n.id; });
+    S.notes = S.notes.filter(function (n) { return ids.indexOf(n.id) === -1; });
+    return Promise.all(ids.map(function (id) { return DB.del('notes', id); }))
+      .then(function () {
+        console.info('Sulat: cleared', ids.length, 'empty note(s)');
+        return ids.length;
+      });
+  }
+
   function purgeOldTrash() {
     var cut = Date.now() - TRASH_DAYS * 86400000;
     var stale = S.notes.filter(function (n) { return n.deletedAt && n.deletedAt < cut; });
@@ -1180,6 +1198,10 @@
       n.locked ? '🔒' : (KIND[n.type] || KIND.text)));
     row.appendChild(markText(el('span', 'ol-title'), displayTitle(n), plainQuery()));
     row.appendChild(el('span', 'ol-date', fmtDate(n.updatedAt)));
+    var bin = el('span', 'ol-bin', n.deletedAt ? '↺' : '✕');
+    bin.dataset.binNote = n.id;
+    bin.title = n.deletedAt ? 'Restore this note' : 'Move to trash';
+    row.appendChild(bin);
     return row;
   }
 
@@ -1554,9 +1576,9 @@
       ? t : null;
   }
 
-  function beginNoteDrag(e, ids) {
+  function beginNoteDrag(e, ids, folderId) {
     noteDragState = {
-      ids: ids, pointerId: e.pointerId,
+      ids: ids, folderId: folderId || null, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
       started: false, ghost: null, target: null
     };
@@ -1569,8 +1591,9 @@
       if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 8) return;
       d.started = true;
       var first = byNoteId(d.ids[0]);
-      d.ghost = el('div', 'note-ghost', d.ids.length > 1
-        ? plural(d.ids.length, 'note')
+      var moving = folderById(d.folderId);
+      d.ghost = el('div', 'note-ghost', moving ? '▢ ' + moving.name
+        : d.ids.length > 1 ? plural(d.ids.length, 'note')
         : ((first && first.title) || 'Untitled'));
       document.body.appendChild(d.ghost);
       document.body.classList.add('dragging-note');
@@ -1594,7 +1617,32 @@
     // the pointerup that ends a drag must not also open the note
     suppressClick = true;
     setTimeout(function () { suppressClick = false; }, 80);
-    if (d.target) dropNotesOn(d.target.dataset.view, d.ids);
+    if (!d.target) return;
+    if (d.folderId) dropFolderOn(d.target.dataset.view, d.folderId);
+    else dropNotesOn(d.target.dataset.view, d.ids);
+  }
+
+  function dropFolderOn(target, folderId) {
+    var f = folderById(folderId);
+    if (!f) return;
+    var dest = folderById(target) ? target : null;
+    if (dest === (f.parentId || null)) return;              // already there
+    if (dest && folderSubtree(folderId).indexOf(dest) !== -1) {
+      toast('A folder cannot go inside itself');
+      return;
+    }
+    var destF = dest ? folderById(dest) : null;
+    if (destF && f.kind && destF.kind && destF.kind !== f.kind) {
+      toast('That folder belongs to another tab');
+      return;
+    }
+    act('Move folder', [{ store: 'folders', id: folderId }], function () {
+      f.parentId = dest;
+    }).then(function () {
+      if (dest) S.expanded[dest] = true;
+      renderTree(); renderList(); renderUndoButtons();
+      toast('Moved into ' + (destF ? destF.name : 'the top level'));
+    });
   }
 
   function dropNotesOn(target, ids) {
@@ -6332,15 +6380,22 @@ function toggleImgFree() {
 
     document.addEventListener('pointerdown', function (e) {
       if (e.button != null && e.button !== 0) return;
+      if (e.target.closest('[data-folder-menu], [data-act]')) return;
       var grip = e.target.closest('[data-note-grip]');
       var card = e.target.closest('[data-note-id]');
-      if (!card) return;
+      var tile = card ? null : e.target.closest('.ftile[data-view], .folder-row[data-view], .ol-row[data-view]');
+      if (!card && !tile) return;
       if (e.target.closest('[data-pickNote], [data-pick-note], [data-binNote], [data-bin-note]')) return;
-      var id = card.dataset.noteId;
-      // dragging one of the selected cards drags the whole selection
-      var ids = (S.selecting && S.picked[id]) ? pickedIds() : [id];
 
-      if (grip || e.pointerType === 'mouse') { beginNoteDrag(e, ids); return; }
+      var dragFolder = tile ? tile.dataset.view : null;
+      if (dragFolder && !folderById(dragFolder)) return;
+      var id = card ? card.dataset.noteId : null;
+      // dragging one of the selected cards drags the whole selection
+      var ids = (card && S.selecting && S.picked[id]) ? pickedIds() : (id ? [id] : []);
+
+      // a mouse drags straight away; a folder always waits for the hold
+      if (!tile && (grip || e.pointerType === 'mouse')) { beginNoteDrag(e, ids); return; }
+      if (tile && e.pointerType === 'mouse') { beginNoteDrag(e, [], dragFolder); return; }
 
       /* A finger has no grip to aim at and the list has to stay scrollable,
          so a press that stays put for a moment becomes a drag. Moving before
@@ -6351,7 +6406,7 @@ function toggleImgFree() {
         x: sx, y: sy, id: pid,
         timer: setTimeout(function () {
           if (noteDragState) return;
-          beginNoteDrag({ pointerId: pid, clientX: sx, clientY: sy }, ids);
+          beginNoteDrag({ pointerId: pid, clientX: sx, clientY: sy }, ids, dragFolder);
           noteDragMove({
             pointerId: pid, clientX: sx + 9, clientY: sy + 9,
             preventDefault: function () { /* nothing to cancel here */ }
@@ -6364,7 +6419,7 @@ function toggleImgFree() {
 
     document.addEventListener('pointermove', function (e) {
       if (!pressDrag.timer || e.pointerId !== pressDrag.id) return;
-      if (Math.hypot(e.clientX - pressDrag.x, e.clientY - pressDrag.y) > 10) {
+      if (Math.hypot(e.clientX - pressDrag.x, e.clientY - pressDrag.y) > 14) {
         clearTimeout(pressDrag.timer);
         pressDrag.timer = null;
       }
@@ -6376,6 +6431,16 @@ function toggleImgFree() {
         pressDrag.timer = null;
       }, true);
     });
+    /* A pointermove cannot stop the page scrolling; a touchmove can. Without
+       this the phone scrolls the list out from under the note being dragged
+       and then cancels the whole gesture. */
+    document.addEventListener('touchmove', function (e) {
+      if (noteDragState && noteDragState.started) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('contextmenu', function (e) {
+      if (noteDragState) e.preventDefault();
+    });
+
     document.addEventListener('pointermove', noteDragMove);
     document.addEventListener('pointerup', endNoteDrag);
     document.addEventListener('pointercancel', endNoteDrag);
@@ -6624,6 +6689,7 @@ function toggleImgFree() {
         return load();          // pick the stamped records back up
       })
       .then(purgeOldTrash)
+      .then(sweepBlankNotes)
       .then(function () { return sortFoldersByType(false); })
       .then(function () {
         // reopen the tab, and the folder in it, you were last in

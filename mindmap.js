@@ -1257,6 +1257,21 @@
   };
 
   Mindmap.prototype._paint = function () {
+    /* Measure before painting. On a phone the canvas changes height on its own
+       -- the address bar slides away, the keyboard opens -- and a resize event
+       does not always arrive. Painting at the old size while taps are measured
+       at the new one is what made a tap land on the node above the one you
+       touched, so the two are kept in step here instead. */
+    var box = this.canvas.getBoundingClientRect();
+    if (box.width && box.height) {
+      var want = Math.min(window.devicePixelRatio || 1, 2.5);
+      if (Math.abs(this.canvas.width - box.width * want) > 1 ||
+          Math.abs(this.canvas.height - box.height * want) > 1) {
+        this.canvas.width = Math.max(1, Math.round(box.width * want));
+        this.canvas.height = Math.max(1, Math.round(box.height * want));
+        this._dpr = want;
+      }
+    }
     var ctx = this.ctx, t = this.theme();
     var dpr = this._dpr || 1;
     var W = this.canvas.width, H = this.canvas.height;

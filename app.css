@@ -2625,3 +2625,17 @@ mark.hit {
 .more-row.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
 /* while a drag is running, nothing else reacts to the finger */
 body.dragging-note .card, body.dragging-note .ftile { touch-action: none; }
+
+/* nothing gets picked or magnified while a drag is running */
+body.dragging-note {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  overflow: hidden;
+}
+body.dragging-note .note-scroll { touch-action: none; }
+.ftile, .folder-row, .ol-row { -webkit-touch-callout: none; }
+
+.ol-bin { flex: 0 0 auto; padding: 0 .3rem; color: var(--ink-3); font-size: .9rem; }
+.ol-bin:hover { color: var(--danger); }
+@media (max-width: 900px) { .ol-bin { padding: 0 .55rem; font-size: 1rem; } }
