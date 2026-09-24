@@ -1401,6 +1401,18 @@
     row('Theme', null, 'act', 'toggle-theme');
     var st = el('div', 'more-foot', $('storageLine').textContent || '');
     page.appendChild(st);
+    var build = el('div', 'more-foot', 'Checking which build is running\u2026');
+    page.appendChild(build);
+    if (window.caches) {
+      caches.keys().then(function (keys) {
+        var mine = keys.filter(function (k) { return k.indexOf('sulat-') === 0; });
+        build.textContent = mine.length
+          ? 'Build ' + mine[0].replace('sulat-', '')
+          : 'Running from the server, no offline copy stored';
+      }).catch(function () { build.textContent = ''; });
+    } else {
+      build.textContent = '';
+    }
     wrap.appendChild(page);
   }
 
@@ -6438,7 +6450,11 @@ function toggleImgFree() {
       if (noteDragState && noteDragState.started) e.preventDefault();
     }, { passive: false });
     document.addEventListener('contextmenu', function (e) {
-      if (noteDragState) e.preventDefault();
+      if (noteDragState || pressDrag.timer) { e.preventDefault(); return; }
+      // holding a note or a folder means "pick this up", never "select text"
+      if (e.target.closest && e.target.closest('.card, .ftile, .folder-row, .ol-row')) {
+        e.preventDefault();
+      }
     });
 
     document.addEventListener('pointermove', noteDragMove);

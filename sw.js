@@ -1,5 +1,5 @@
 /* Sulat service worker — cache-first app shell so the app opens with no network. */
-var CACHE = 'sulat-83225537e9ff';
+var CACHE = 'sulat-eb3a6f99aedd';
 var SHELL = [
   './',
   'index.html',

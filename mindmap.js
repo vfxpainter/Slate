@@ -1474,9 +1474,13 @@
     c.addEventListener('pointerdown', function (e) {
       c.focus({ preventScroll: true });
       try { c.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
-      // A mouse only ever has one contact. If a previous pointerup went missing
-      // the stale id would make the next click look like a two-finger pinch.
-      if (e.pointerType === 'mouse') self._pointers.clear();
+      /* A finger that ends without a pointerup -- the phone taking the
+         gesture for a scroll, or the address bar sliding in -- would stay in
+         this map for ever, and the next tap would look like the second finger
+         of a pinch: nothing gets selected and the highlight stays on the node
+         you tapped before. The first finger of any new gesture clears
+         whatever was left behind. A mouse is always primary. */
+      if (e.isPrimary) self._pointers.clear();
       self._pointers.set(e.pointerId, self._localPoint(e));
 
       if (self._pointers.size === 2) {
