@@ -71,13 +71,33 @@
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
 
   var toastTimer = null;
-  function toast(msg) {
+  /* A notice, and when something was removed, the way back from it. The
+     button matters most on a phone, where there is no Ctrl+Z. */
+  function toast(msg, action) {
     var t = $('toast');
-    t.textContent = msg;
+    t.textContent = '';
+    t.appendChild(document.createTextNode(msg));
+    if (action && action.label) {
+      var b = el('button', 'toast-act', action.label);
+      b.onclick = function () {
+        clearTimeout(toastTimer);
+        t.hidden = true;
+        action.run();
+      };
+      t.appendChild(b);
+    }
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { t.hidden = true; },
-      Math.min(2600, 1200 + String(msg).length * 30));
+      action ? 7000 : Math.min(2600, 1200 + String(msg).length * 30));
+  }
+
+  // the one thing an Undo button on a notice ever needs to do
+  function undoLast() {
+    History.undo().then(function (label) {
+      renderUndoButtons();
+      if (label) toast('Put back');
+    });
   }
 
   /* Date display. "relative" is the old behaviour (time today, then short
@@ -564,8 +584,16 @@
     });
   }
 
+  /* A note with nothing in it is never listed, counted or searched -- not
+     while it waits to be swept, not while an older version's leftovers are
+     still on disk. The one exception is the note open in front of you, which
+     has to stay put while you are typing into it. */
   function liveNotes() {
-    return S.notes.filter(function (n) { return !n.deletedAt; });
+    return S.notes.filter(function (n) {
+      if (n.deletedAt) return false;
+      if (S.note && S.note.id === n.id) return true;
+      return !isBlankNote(n);
+    });
   }
   function countDirect(folderId) {
     return liveNotes().filter(function (n) { return n.folderId === folderId; }).length;
@@ -759,6 +787,15 @@
       var ids = S.folderDeep ? subtreeIds(S.view) : [S.view];
       list = liveNotes().filter(function (n) { return ids.indexOf(n.folderId) !== -1; });
     }
+    /* The old layout's Notes / Lists / Mindmaps switch means the same thing
+       as the tabs do: one kind at a time, folders and their contents alike.
+       Filtering the folders alone left every kind of note on screen, which
+       made the switch look like it did nothing. */
+    if (S.layout === 'classic') {
+      var only = currentKind();
+      list = list.filter(function (n) { return kindOf(n) === only; });
+    }
+
     if (S.q) {
       // "tag:work" narrows to a tag; anything else is a plain text search
       var m = S.q.match(/^tag:\s*(.+)$/i);
@@ -968,7 +1005,9 @@
     root.appendChild(groupHeader('Other'));
     root.appendChild(navItem({
       view: 'trash', name: 'Trash', icon: '⊘',
-      count: S.notes.filter(function (n) { return n.deletedAt; }).length,
+      count: S.notes.filter(function (n) {
+        return n.deletedAt && kindOf(n) === currentKind();
+      }).length,
       active: S.view === 'trash'
     }));
   }
@@ -1011,7 +1050,8 @@
       title.classList.remove('trail');
       title.textContent =
         S.q ? 'Results for "' + S.q + '"'
-          : S.view === 'all' ? 'All notes'
+          : S.view === 'all'
+            ? (S.layout === 'classic' ? 'All ' + KIND_TAB[currentKind()].toLowerCase() : 'All notes')
           : S.view === 'pinned' ? 'Pinned'
           : S.view === 'trash' ? 'Trash · auto-clears after ' + TRASH_DAYS + ' days'
           : S.view === 'unfiled' ? 'Unfiled'
@@ -1568,7 +1608,8 @@
     }).then(function () {
       if (!restoring && S.note && S.note.id === id) showEmpty();
       renderTree(); renderList(); renderMeta(); renderUndoButtons();
-      toast(restoring ? 'Restored' : 'Moved to trash — Ctrl+Z to undo');
+      toast(restoring ? 'Restored' : 'Moved to trash',
+        restoring ? null : { label: 'Undo', run: undoLast });
     });
   }
 
@@ -1672,7 +1713,7 @@
         if (S.note && ids.indexOf(S.note.id) !== -1) showEmpty();
         S.picked = {};
         renderTree(); renderList(); renderSelectBar(); renderUndoButtons();
-        toast('Moved to trash — Ctrl+Z to undo');
+        toast('Moved to trash', { label: 'Undo', run: undoLast });
       });
       return;
     }
@@ -1784,7 +1825,34 @@
   /* ================= editor ================= */
 
   function autosize(ta) {
+    if (ta && ta.id === 'noteTitle') { fitTitle(ta); return; }
     ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
+
+  /* A long title is set a little smaller rather than sprawling down the page:
+     two lines at full size, then it steps down until it fits or reaches
+     two-thirds, which is still clearly a heading. */
+  function fitTitle(ta) {
+    ta = ta || $('noteTitle');
+    if (!ta) return;
+    ta.style.fontSize = '';
+    ta.style.height = 'auto';
+    var cs = getComputedStyle(ta);
+    var base = parseFloat(cs.fontSize) || 24;
+    var pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    var floor = base * 0.66;
+    var step = Math.max(1, Math.round(base * 0.06));
+    var size = base, guard = 0;
+    function lineH() {
+      var v = parseFloat(getComputedStyle(ta).lineHeight);
+      return v || size * 1.32;
+    }
+    while (guard++ < 16 && size - step >= floor && ta.scrollHeight - pad > lineH() * 2 + 1) {
+      size -= step;
+      ta.style.fontSize = size + 'px';
+      ta.style.height = 'auto';
+    }
     ta.style.height = ta.scrollHeight + 'px';
   }
 
@@ -4007,7 +4075,7 @@ function toggleImgFree() {
                 if (fids.indexOf(S.view) !== -1) S.view = 'all';
               }).then(function () {
                 renderTree(); renderList(); renderMeta(); renderUndoButtons();
-                toast('Folder deleted — Ctrl+Z to undo');
+                toast('Folder deleted', { label: 'Undo', run: undoLast });
               });
             }, true);
         };
@@ -5288,7 +5356,7 @@ function toggleImgFree() {
         S.picked = {};
         if (S.note && ids.indexOf(S.note.id) !== -1) showEmpty();
         renderTree(); renderList(); renderSelectBar(); renderUndoButtons();
-        toast('Moved to trash — Ctrl+Z to undo');
+        toast('Moved to trash', { label: 'Undo', run: undoLast });
       });
     },
 
@@ -5494,7 +5562,7 @@ function toggleImgFree() {
       })
         .then(function () {
           renderTree(); showEmpty(); renderUndoButtons();
-          toast('Moved to trash — Ctrl+Z to undo');
+          toast('Moved to trash', { label: 'Undo', run: undoLast });
         });
     },
     'restore': function () {
@@ -5517,7 +5585,7 @@ function toggleImgFree() {
             S.notes = S.notes.filter(function (x) { return x.id !== n.id; });
           }).then(function () {
             renderTree(); showEmpty(); renderUndoButtons();
-            toast('Deleted');
+            toast('Deleted', { label: 'Undo', run: undoLast });
           });
         }, true);
     },
@@ -5533,7 +5601,7 @@ function toggleImgFree() {
           }).then(function () {
             if (S.note && ids.indexOf(S.note.id) !== -1) showEmpty();
             renderTree(); renderList(); renderUndoButtons();
-            toast('Trash emptied');
+            toast('Trash emptied', { label: 'Undo', run: undoLast });
           });
         }, true);
     },
@@ -6036,12 +6104,19 @@ function toggleImgFree() {
     if (!scroller) return;
 
     /* A narrower column wraps the title differently, and its height is not
-       something CSS works out on its own. */
+       something CSS works out on its own. The window resizing is only one way
+       that column changes width: dragging the divider between the panes, the
+       page-width setting and switching layout all do it too, and none of them
+       is a window resize. So the column itself is watched. */
     var settle = 0;
-    window.addEventListener('resize', function () {
+    function refitTitle() {
       clearTimeout(settle);
       settle = setTimeout(function () { if (S.note) autosize($('noteTitle')); }, 120);
-    });
+    }
+    window.addEventListener('resize', refitTitle);
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(refitTitle).observe($('editorBody'));
+    }
 
     scroller.addEventListener('wheel', function (e) {
       if (!(e.ctrlKey || e.metaKey)) return;   // plain scrolling is left alone
