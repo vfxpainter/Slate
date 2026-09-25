@@ -3534,6 +3534,12 @@ function toggleImgFree() {
         },
         onSelect: function (node) { renderMapTools(node); },
         onNodeMenu: function (node, x, y) { showNodeMenu(x, y); },
+        onCam: function (scale) {
+          var z = $('mapZoom');
+          if (!z) return;
+          var pct = Math.round(scale * 100) + '%';
+          if (z.textContent !== pct) z.textContent = pct;
+        },
         onEdgeSelect: function () { renderMapTools(S.map.selected); },
         onSelectModeChange: function (on) {
           $('selModeBtn').classList.toggle('on', on);

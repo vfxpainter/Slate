@@ -225,7 +225,9 @@
       type: EDGE_TYPES[st.type] ? st.type : DEF_EDGE.type,
       width: st.width || DEF_EDGE.width
     };
-    this.auto = !!st.auto;           // auto-arrange: nodes fall into place
+    /* Auto-arrange: on for anything new, so a map never turns into a heap.
+       A map that was built by hand keeps the setting it was saved with. */
+    this.auto = st.auto === undefined ? this.nodes.length <= 1 : !!st.auto;
     this.selected = null;
     this.selection = [];
     this.selectedEdge = null;
@@ -563,10 +565,13 @@
     return { x: (px - this.cam.x) / this.cam.s, y: (py - this.cam.y) / this.cam.s };
   };
 
-  Mindmap.prototype.hit = function (px, py) {
+  /* `skip` leaves nodes out of the search -- used while dragging, where the
+     node in your hand sits under the pointer and would always win. */
+  Mindmap.prototype.hit = function (px, py, skip) {
     var p = this.toWorld(px, py);
     for (var i = this.nodes.length - 1; i >= 0; i--) {
       var n = this.nodes[i];
+      if (skip && skip.indexOf(n) !== -1) continue;
       if (p.x >= n.x - n.w / 2 && p.x <= n.x + n.w / 2 &&
           p.y >= n.y - n.h / 2 && p.y <= n.y + n.h / 2) return n;
     }
@@ -597,6 +602,19 @@
   Mindmap.prototype.edgeEnds = function (e) {
     var a = this.byId(e.a), b = this.byId(e.b);
     if (!a || !b) return null;
+    /* In a tidy map every child sits to the right of its parent, so the line
+       leaves the parent's side and arrives at the child's, like a chart --
+       rather than pointing at the middle of each box. */
+    if (this.auto && b.x > a.x + a.w / 2) {
+      var pa2 = { x: a.x + a.w / 2, y: a.y };
+      var pb2 = { x: b.x - b.w / 2, y: b.y };
+      var reach = Math.max(18, (pb2.x - pa2.x) * 0.55);
+      return {
+        a: pa2, b: pb2,
+        c1: { x: pa2.x + reach, y: pa2.y },
+        c2: { x: pb2.x - reach, y: pb2.y }
+      };
+    }
     var pa = borderPoint(a, b), pb = borderPoint(b, a);
     var mx = (pa.x + pb.x) / 2;
     return { a: pa, b: pb, c1: { x: mx, y: pa.y }, c2: { x: mx, y: pb.y } };
@@ -826,9 +844,13 @@
      needs, nothing overlapping however many nodes there are. Siblings keep the
      order they are in on screen, so dragging one above another reorders it.
      Turning it off leaves every node where it is, free to drag again. */
+  var GLIDE = 190;                                     // ms for a node to move
+
   Mindmap.prototype.arrange = function () {
     if (!this.nodes.length) return;
     this._layout();                                    // sizes before positions
+    var was = {};
+    this.nodes.forEach(function (n) { was[n.id] = { x: n.x, y: n.y }; });
     var byId = {}, kids = {}, hasParent = {};
     this.nodes.forEach(function (n) { byId[n.id] = n; });
     this.edges.forEach(function (e) {
@@ -885,6 +907,27 @@
       place(r.id, left, top);
       top += band[r.id] + gy * 4;
     });
+
+    // anything that moved glides there rather than jumping
+    var now = Date.now();
+    this.nodes.forEach(function (n) {
+      var old = was[n.id];
+      if (!old) return;
+      if (Math.abs(old.x - n.x) < 0.5 && Math.abs(old.y - n.y) < 0.5) return;
+      n._from = old;
+      n._t0 = now;
+    });
+  };
+
+  /* Hang a node (and everything under it) under another one. */
+  Mindmap.prototype.reparent = function (node, parent) {
+    if (!node || !parent || node === parent) return false;
+    if (this.descendantsOf(node).indexOf(parent) !== -1) return false;
+    this.edges = this.edges.filter(function (e) { return e.b !== node.id; });
+    this.edges.push({ a: parent.id, b: node.id });
+    this.select(node);
+    this._changed();
+    return true;
   };
 
   Mindmap.prototype.setAuto = function (on) {
@@ -943,6 +986,34 @@
   };
 
   // Everything hanging off this node, following links outwards.
+  /* The node an arrow key should move to. */
+  Mindmap.prototype.step = function (from, key) {
+    if (!from) return null;
+    var self = this, parentOf = {}, kids = {};
+    this.edges.forEach(function (e) {
+      if (!self.byId(e.a) || !self.byId(e.b)) return;
+      parentOf[e.b] = e.a;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+    });
+    var byY = function (ids) {
+      return ids.map(function (id) { return self.byId(id); })
+        .filter(Boolean)
+        .sort(function (a, b) { return a.y - b.y; });
+    };
+    if (key === 'ArrowLeft') return this.byId(parentOf[from.id]) || null;
+    if (key === 'ArrowRight') {
+      var own = byY(kids[from.id] || []);
+      return own[0] || null;
+    }
+    var sibs = byY(kids[parentOf[from.id]] ||
+      this.nodes.filter(function (n) { return !parentOf[n.id]; })
+        .map(function (n) { return n.id; }));
+    var at = sibs.indexOf(from);
+    if (at === -1) return null;
+    var next = key === 'ArrowUp' ? sibs[at - 1] : sibs[at + 1];
+    return next || null;
+  };
+
   Mindmap.prototype.descendantsOf = function (node) {
     var out = [], seen = {}, stack = [node.id], self = this;
     seen[node.id] = true;
@@ -1191,6 +1262,9 @@
     this._raf = requestAnimationFrame(function () {
       self._raf = null;
       self._paint();
+      if (self.opts.onCam) self.opts.onCam(self.cam.s);
+      // keep the frames coming while anything is still gliding
+      if (self.nodes.some(function (n) { return n._t0; })) self.draw();
     });
   };
 
@@ -1304,6 +1378,21 @@
         this._dpr = want;
       }
     }
+    /* A node that has just moved is drawn on its way there. The real
+       coordinates are put back before this returns, so hit testing, saving
+       and everything else still sees where the node actually is. */
+    var flying = null, nowMs = Date.now();
+    for (var fi = 0; fi < this.nodes.length; fi++) {
+      var fn = this.nodes[fi];
+      if (!fn._t0) continue;
+      var k = (nowMs - fn._t0) / GLIDE;
+      if (k >= 1) { fn._t0 = 0; fn._from = null; continue; }
+      var ease = 1 - Math.pow(1 - k, 3);
+      (flying = flying || []).push({ n: fn, x: fn.x, y: fn.y });
+      fn.x = fn._from.x + (fn.x - fn._from.x) * ease;
+      fn.y = fn._from.y + (fn.y - fn._from.y) * ease;
+    }
+
     var ctx = this.ctx, t = this.theme();
     var dpr = this._dpr || 1;
     var W = this.canvas.width, H = this.canvas.height;
@@ -1412,12 +1501,15 @@
       var paint = this.paintOf(n, t);
       var y0 = n.y - n.h / 2;
 
+      var dropping = this._dropOn === n;
       this._shapePath(ctx, n);
       ctx.fillStyle = paint.fill;
       ctx.fill();
-      ctx.strokeStyle = (sel || pending) ? t.accent : paint.line;
-      ctx.lineWidth = pending ? 3 : (sel ? 2 : 1);
+      ctx.strokeStyle = (sel || pending || dropping) ? t.accent : paint.line;
+      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : 1);
+      if (dropping) ctx.setLineDash([6, 4]);
       ctx.stroke();
+      ctx.setLineDash([]);
 
       /* Clip to the outline before drawing anything inside it. The wrapping
          above should already fit, but measurement and the real glyphs can
@@ -1495,6 +1587,13 @@
       ctx.stroke();
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // whatever was drawn mid-flight goes back to where it really is
+    if (flying) {
+      for (var ri = 0; ri < flying.length; ri++) {
+        flying[ri].n.x = flying[ri].x;
+        flying[ri].n.y = flying[ri].y;
+      }
+    }
   };
 
   /* ---------- input ---------- */
@@ -1705,6 +1804,14 @@
           m.n.y = w.y + m.dy;
         });
         self._drag.moved = true;
+        // the node under the finger becomes the new parent when you let go
+        var moving = self._drag.movers.map(function (m) { return m.n; });
+        var over = self.hit(p.x, p.y, moving);
+        if (over && self.descendantsOf(self._drag.node).indexOf(over) === -1) {
+          self._dropOn = over;
+        } else {
+          self._dropOn = null;
+        }
         self.draw();
       }
     });
@@ -1780,7 +1887,13 @@
       }
       self._pointers.delete(e.pointerId);
       if (self._pointers.size < 2) self._pinch = null;
-      if (self._drag && self._drag.moved) self._changed();
+      if (self._drag && self._drag.moved && self._dropOn) {
+        self.reparent(self._drag.node, self._dropOn);
+        self._dropOn = null;
+      } else if (self._drag && self._drag.moved) {
+        self._dropOn = null;
+        self._changed();
+      }
       if (self._pointers.size === 0) self._drag = null;
     }
     c.addEventListener('contextmenu', function (e) {
@@ -1828,7 +1941,14 @@
         var made = e.shiftKey ? self.addSibling() : self.addChild();
         self.reveal(made);
         if (made && self.opts.onRename) self.opts.onRename(made, true);
-      } else if (e.key === 'Enter' || e.key === 'F2') {
+      } else if (e.key === 'Enter') {
+        // Enter makes the next one along, the way every outline works
+        if (self.selected) {
+          var sib = self.addSibling();
+          self.reveal(sib);
+          if (sib && self.opts.onRename) self.opts.onRename(sib, true);
+        } else handled = false;
+      } else if (e.key === 'F2') {
         if (self.selected && self.opts.onRename) self.opts.onRename(self.selected);
         else handled = false;
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1840,14 +1960,21 @@
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
                  e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         if (!self.selected) { handled = false; }
-        else {
-          var step = e.shiftKey ? 40 : 10;
+        else if (e.shiftKey && !self.auto) {
+          // hand placement: shift and an arrow nudges the node itself
+          var step = 20;
           if (e.key === 'ArrowUp') self.selected.y -= step;
           if (e.key === 'ArrowDown') self.selected.y += step;
           if (e.key === 'ArrowLeft') self.selected.x -= step;
           if (e.key === 'ArrowRight') self.selected.x += step;
           self.reveal(self.selected);
           self._changed();
+        } else {
+          // the arrows walk the map: out to a child, back to the parent,
+          // up and down between the nodes that share a parent
+          var go = self.step(self.selected, e.key);
+          if (go) { self.select(go); self.reveal(go); }
+          else handled = false;
         }
       } else {
         handled = false;
