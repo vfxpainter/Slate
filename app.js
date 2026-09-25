@@ -45,6 +45,7 @@
     hitQuery: '',         // the word to mark inside the note you opened
     hits: [],             // where it appears
     hitAt: 0,
+    editingWas: '',       // what a node said before you started typing in it
     tabView: {},          // tab -> tiles | list | outline
     folderDeep: false,    // a folder shows its own notes, not its children's
     autoBackup: false,
@@ -3271,6 +3272,25 @@ function toggleImgFree() {
     };
   }
 
+  /* Typing into a node grows the node itself, so the words are never
+     hidden behind a box that stayed the size it was when you started. The
+     text is put into the node as you type and the map re-measured; the
+     original is kept so cancelling puts it back, and so the rename is still
+     one undo step rather than one per letter. */
+  function sizeNodeEdit() {
+    var node = S.editingNode;
+    if (!node || !S.map) return;
+    var ta = $('mapInlineEdit');
+    node.text = ta.value;
+    S.map._layout();
+    S.map.draw();
+    var box = nodeScreenBox(node);
+    ta.style.left = box.left + 'px';
+    ta.style.top = box.top + 'px';
+    ta.style.width = box.w + 'px';
+    ta.style.height = box.h + 'px';
+  }
+
   function startNodeEdit(node) {
     if (!node || !S.map) return;
     var ta = $('mapInlineEdit');
@@ -3284,6 +3304,7 @@ function toggleImgFree() {
     ta.value = node.text || '';
     ta.hidden = false;
     S.editingNode = node;
+    S.editingWas = node.text || '';
     S.map.select(node);
     ta.focus();
     ta.select();
@@ -3295,10 +3316,15 @@ function toggleImgFree() {
     var node = S.editingNode;
     S.editingNode = null;
     ta.hidden = true;
+    var was = S.editingWas || '';
+    node.text = was;                        // undo the live typing...
     var v = ta.value.replace(/\s+/g, ' ').trim();
-    if (v !== (node.text || '')) {
+    if (v !== was) {
       S.map.select(node);
-      S.map.renameSelected(v);
+      S.map.renameSelected(v);              // ...and do it once, properly
+    } else {
+      S.map._layout();
+      S.map.draw();
     }
     if (then) then(); else focusMap();
   }
@@ -3306,6 +3332,11 @@ function toggleImgFree() {
   function cancelNodeEdit() {
     var ta = $('mapInlineEdit');
     if (ta.hidden) return;
+    if (S.editingNode) {
+      S.editingNode.text = S.editingWas || '';
+      S.map._layout();
+      S.map.draw();
+    }
     S.editingNode = null;
     ta.hidden = true;
     focusMap();
@@ -3393,7 +3424,7 @@ function toggleImgFree() {
     var any = count > 0;
 
     // colour and delete work on any number; rename, child and image need one
-    ['map-child', 'map-rename', 'map-image'].forEach(function (a) {
+    ['map-rename', 'map-image'].forEach(function (a) {
       Array.prototype.forEach.call(document.querySelectorAll('[data-act="' + a + '"]'), function (elx) {
         elx.classList.toggle('dimmed', !one);
       });
@@ -3459,7 +3490,7 @@ function toggleImgFree() {
      where there is room; on a phone the icons alone make one short row, and
      every button keeps its name as a tooltip and for screen readers. */
   var MAP_ICONS = {
-    'map-add': '<rect x="3.5" y="7" width="17" height="10" rx="3"/><path d="M12 9.5v5M9.5 12h5"/>',
+    'map-sibling': '<rect x="2.5" y="4" width="19" height="6.5" rx="2"/><rect x="2.5" y="13.5" width="19" height="6.5" rx="2"/><path d="M12 15.2v3M10.5 16.7h3"/>',
     'map-child': '<rect x="2.5" y="9" width="7" height="6" rx="2"/><rect x="15.5" y="3.5" width="6" height="5" rx="1.5"/><rect x="15.5" y="15.5" width="6" height="5" rx="1.5"/><path d="M9.5 12h3M12.5 6v12M12.5 6h3M12.5 18h3"/>',
     'map-rename': '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     'map-select-mode': '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2.6"/>',
@@ -3491,7 +3522,8 @@ function toggleImgFree() {
       ico.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
       b.appendChild(ico);
       b.appendChild(label);
-      var tip = { 'map-zoom-out': 'Zoom out', 'map-zoom-in': 'Zoom in', 'map-add': 'New node',
+      var tip = { 'map-zoom-out': 'Zoom out', 'map-zoom-in': 'Zoom in',
+        'map-sibling': 'New node beside this one', 'map-child': 'New node under this one',
         'map-image': 'Add image', 'map-image-remove': 'Remove image' }[b.dataset.act] || name;
       b.title = tip + (key ? ' (' + key.textContent + ')' : '');
       b.setAttribute('aria-label', tip);
@@ -5529,21 +5561,28 @@ function toggleImgFree() {
       });
     },
 
-    'map-add': function () {
-      /* Always joined to something. With a node selected it hangs off that;
-         with nothing selected it hangs off the middle of the map, which is
-         what a loose node was never any use for. Only an empty map gets a
-         node on its own -- there is nothing to join it to. */
-      var target = S.map.selected || S.map.centralNode();
-      var made = target ? S.map.addChild(target) : S.map.addNode();
+    /* Two buttons, two jobs, the same as Tab and Enter on a keyboard:
+       Child hangs the new node under the selected one, Sibling puts it
+       beside it. Both always join the map -- with nothing selected they
+       work from the middle of it, and an empty map gets its first node. */
+    'map-sibling': function () {
+      var sel = S.map.selected;
+      var made;
+      if (!sel) {
+        var mid = S.map.centralNode();
+        made = mid ? S.map.addChild(mid) : S.map.addNode();
+      } else {
+        made = S.map.addSibling();
+      }
       S.map.reveal(made);
       if (made && S.map.opts.onRename) S.map.opts.onRename(made, true);
       focusMap();
     },
     'map-child': function () {
-      if (!S.map.selected) { toast('Select a node first.'); return; }
-      var n = S.map.addChild();
+      var parent = S.map.selected || S.map.centralNode();
+      var n = parent ? S.map.addChild(parent) : S.map.addNode();
       S.map.reveal(n);
+      if (n && S.map.opts.onRename) S.map.opts.onRename(n, true);
       focusMap();
     },
     'map-rename': function () {
@@ -6327,6 +6366,7 @@ function toggleImgFree() {
         });
       }
     });
+    inline.addEventListener('input', sizeNodeEdit);
     inline.addEventListener('blur', function () { commitNodeEdit(); });
 
     // any interaction with the canvas itself closes the editor first

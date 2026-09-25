@@ -1043,7 +1043,9 @@
     for (var i = 0; i < this.edges.length; i++) {
       if (this.edges[i].b === sel.id) { parentEdge = this.edges[i]; break; }
     }
-    if (!parentEdge) return this.addNode('Idea', sel.x, sel.y + sel.h + 24);
+    /* The node at the top of a branch has nothing to sit beside, so the new
+       one goes under it instead -- joined either way, never adrift. */
+    if (!parentEdge) return this.addChild(sel);
     return this.addChild(this.byId(parentEdge.a));
   };
 
