@@ -5530,9 +5530,12 @@ function toggleImgFree() {
     },
 
     'map-add': function () {
-      // with a node selected this adds under it, which is what you mean
-      // nine times in ten; with nothing selected it starts a fresh one
-      var made = S.map.selected ? S.map.addChild() : S.map.addNode();
+      /* Always joined to something. With a node selected it hangs off that;
+         with nothing selected it hangs off the middle of the map, which is
+         what a loose node was never any use for. Only an empty map gets a
+         node on its own -- there is nothing to join it to. */
+      var target = S.map.selected || S.map.centralNode();
+      var made = target ? S.map.addChild(target) : S.map.addNode();
       S.map.reveal(made);
       if (made && S.map.opts.onRename) S.map.opts.onRename(made, true);
       focusMap();
