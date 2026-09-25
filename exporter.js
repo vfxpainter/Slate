@@ -935,6 +935,15 @@
         // Keep the version stamp: dropping it would make a note from an older
         // build look current, and the migration would skip it.
         if (n.schema) out.schema = n.schema;
+        /* And the pages. Only the sheet you have open keeps its content on the
+           note itself; the rest live in this list. Leaving it behind meant a
+           note with four sheets came back from its own backup with one, and
+           the other three were gone with nothing to say so. */
+        if (Array.isArray(n.pages) && n.pages.length) {
+          out.pages = n.pages;
+          out.page = n.page && n.pages.some(function (p) { return p.id === n.page; })
+            ? n.page : n.pages[0].id;
+        }
         return out;
       });
       return DB.all('folders').then(function (myFolders) {

@@ -68,7 +68,11 @@
     return n;
   }
   function esc(s) { return Exporter.esc(s); }
-  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  var ODD_PLURALS = { copy: 'copies', entry: 'entries', 'exact copy': 'exact copies' };
+  function plural(n, word) {
+    if (n === 1) return n + ' ' + word;
+    return n + ' ' + (ODD_PLURALS[word] || word + 's');
+  }
 
   var toastTimer = null;
   /* A notice, and when something was removed, the way back from it. The
@@ -4584,6 +4588,71 @@ function toggleImgFree() {
     });
   }
 
+  /* One page's worth of content, with nothing in it that changes just by
+     looking at the note. */
+  function pageBits(c) {
+    c = c || {};
+    return JSON.stringify({
+      body: c.body || '', bodyHtml: c.bodyHtml || '',
+      items: c.items || [], map: c.map || null
+    });
+  }
+
+  /* Everything a note actually holds: not its id, not when it was touched,
+     not which page happens to be open. Two notes with the same key are
+     indistinguishable -- there is nothing to choose between them.
+
+     Pages are folded in the same way the merger folds them, because the open
+     page keeps its content on the note itself and the rest in note.pages[];
+     compared raw, the same note open on page 2 here and page 1 there would
+     look like two different notes. */
+  function contentKeyOf(n) {
+    var top = {
+      body: n.body || '', bodyHtml: n.bodyHtml || '',
+      items: n.items || [], map: n.map || null
+    };
+    var pages;
+    if (!Array.isArray(n.pages) || !n.pages.length) {
+      pages = [['', pageBits(top)]];
+    } else {
+      var ids = n.pages.map(function (p) { return p.id; });
+      var active = ids.indexOf(n.page) < 0 ? ids[0] : n.page;
+      pages = n.pages.map(function (p) {
+        return [p.name || '', pageBits(p.content || (p.id === active ? top : null))];
+      });
+    }
+    return JSON.stringify({
+      type: n.type || 'text',
+      title: (n.title || '').trim(),
+      // the same words filed in two different folders were put there on
+      // purpose; those are offered by title below rather than swept away
+      folder: n.folderId || null,
+      tags: tagsOf(n).slice().sort(),
+      images: (n.images || []).slice().sort(),
+      enc: n.enc || null,
+      pages: pages
+    });
+  }
+
+  function exactDuplicateGroups() {
+    var byKey = {};
+    liveNotes().forEach(function (n) {
+      var k = contentKeyOf(n);
+      (byKey[k] = byKey[k] || []).push(n);
+    });
+    return Object.keys(byKey).map(function (k) { return byKey[k]; })
+      .filter(function (g) { return g.length > 1; });
+  }
+
+  // of several identical copies, the one that was here first -- and a pinned
+  // copy before an unpinned one, so a pin is never the thing that gets lost
+  function keeperOf(group) {
+    return group.slice().sort(function (a, b) {
+      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    })[0];
+  }
+
   function noteGroups() {
     var byKey = {};
     liveNotes().forEach(function (n) {
@@ -4597,8 +4666,38 @@ function toggleImgFree() {
   }
 
   function duplicatesDialog() {
+    /* Identical copies are not a question. Nothing distinguishes them, so
+       there is nothing to pick between, and asking nine times about nine
+       copies of the same note is not care -- it is a chore. They go to the
+       trash in one undoable step, and only the notes that genuinely differ
+       are put to you below. */
+    var exact = exactDuplicateGroups();
+    if (exact.length) {
+      var doomed = [];
+      exact.forEach(function (g) {
+        var keep = keeperOf(g);
+        g.forEach(function (n) { if (n.id !== keep.id) doomed.push(n.id); });
+      });
+      act('Remove ' + plural(doomed.length, 'duplicate'), noteRefs(doomed), function () {
+        var now = Date.now();
+        doomed.forEach(function (id) {
+          var n = byNoteId(id);
+          if (n) { n.deletedAt = now; n.updatedAt = now; }
+        });
+      }).then(function () {
+        renderTree(); renderList(); renderUndoButtons();
+        toast(plural(doomed.length, 'exact copy') + ' removed',
+          { label: 'Undo', run: undoLast });
+        // Only reopen if something is still genuinely in question. Calling
+        // back unconditionally reached the "nothing looks duplicated" notice,
+        // which replaced the one that had just offered the way back.
+        if (noteGroups().length) duplicatesDialog();
+      });
+      return;
+    }
+
     var groups = noteGroups();
-    if (!groups.length) { toast('No notes share a title.'); return; }
+    if (!groups.length) { toast('Nothing looks duplicated.'); return; }
 
     var html = '<h3>Possible duplicates</h3><p class="sub">' + plural(groups.length, 'title') +
       ' show up more than once. Pick which copy to keep in each — the rest go to ' +
@@ -4931,6 +5030,9 @@ function toggleImgFree() {
           '<span>One file with everything, to keep or move to your phone</span></button>' +
           '<button class="opt" data-x="in"><b>Import backup</b>' +
           '<span>Merges into what is here</span></button>' +
+          '<button class="opt" data-x="merge"><b>Merge backups</b>' +
+          '<span>Every device’s backup into one file to import everywhere</span>' +
+          '</button>' +
           '</div>' +
 
           '<div class="auto-box">' +
@@ -4973,8 +5075,8 @@ function toggleImgFree() {
           '<span id="snapLine">kept automatically on this device</span></button>' +
           '<button class="opt" data-x="dupfolders"><b>Merge duplicate folders</b>' +
           '<span>Fixes “Ideas” or “Work” showing up twice</span></button>' +
-          '<button class="opt" data-x="dupnotes"><b>Find duplicate notes</b>' +
-          '<span>For when the same note landed twice</span></button>' +
+          '<button class="opt" data-x="dupnotes"><b>Duplicate notes</b>' +
+          '<span>Removes exact copies, asks about the rest</span></button>' +
           '<button class="opt" data-x="refresh"><b>Reload the app files</b>' +
           '<span id="buildLine">If the app looks out of date after an update</span></button>' +
           '<button class="opt" data-x="persist"><b>' +
@@ -5050,6 +5152,14 @@ function toggleImgFree() {
             root.querySelector('[data-x="out"]').onclick = function () {
               closeDlg();
               backupDialog();
+            };
+            /* The merger is a page of its own rather than a screen in here:
+               it holds several backups at once and belongs to none of them,
+               and opening it in its own tab keeps it well away from the
+               notes on this device until you import what it wrote. */
+            root.querySelector('[data-x="merge"]').onclick = function () {
+              closeDlg();
+              window.open('merge.html', '_blank', 'noopener');
             };
             var relinkBtn = root.querySelector('[data-x="relink"]');
             if (relinkBtn) {

@@ -1,0 +1,1000 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sulat Merge</title>
+<!--
+  Sulat Merge - one file, no install.
+
+  Put in the backup from every device. It works out what each one has that the
+  others do not, shows you before it does anything, and writes one file you
+  import everywhere so all your devices end up the same.
+
+  The rules are the ones the app itself uses when you import a backup, kept
+  deliberately in step with exporter.js:
+
+    * a note that exists in more than one file resolves to whichever copy was
+      edited last -- but a page that only the older copy has is still carried
+      over, so a whole sheet is never dropped just because the note it sits in
+      was touched somewhere else more recently
+    * folders match on type plus their whole name path, never on id, so a
+      backup from before the folders were split by type does not arrive as a
+      second "Ideas"
+    * a note that arrives under a different id but with identical content is
+      the same note arriving twice, not a new one
+    * nothing missing from a file is ever treated as deleted. Only a note
+      actually in the bin carries a deletion, with the time it happened
+
+  Your notes never leave this page. Nothing is uploaded, there is no server,
+  and a locked note is merged as ciphertext -- this page cannot read one and
+  never asks for a passphrase.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #14151a;
+  --pane: #1b1d23;
+  --pane-2: #202329;
+  --line: #2c2f38;
+  --line-soft: #262931;
+  --ink: #e9e6df;
+  --ink-2: #a9a49a;
+  --ink-3: #7b766c;
+  --accent: #d29055;
+  --accent-soft: #33291f;
+  --danger: #e0705f;
+  --ok: #6fbf8b;
+  --new: #6ba8e0;
+  --r: 10px;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f4ef; --pane: #fffdf8; --pane-2: #efece4;
+  --line: #e0dbd0; --line-soft: #ebe7dd;
+  --ink: #221f1a; --ink-2: #5d584e; --ink-3: #8f897c;
+  --accent: #a8622f; --accent-soft: #f0e2d6; --danger: #b03a2e;
+  --ok: #2f7d4f; --new: #2f6ea8;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 var(--font-ui);
+  padding: 24px 16px 64px;
+}
+.wrap { max-width: 860px; margin: 0 auto; }
+h1 { font-size: 1.35rem; margin: 0 0 4px; font-weight: 650; }
+.sub { color: var(--ink-2); margin: 0 0 22px; font-size: .92rem; }
+.card {
+  background: var(--pane); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 16px; margin-bottom: 16px;
+}
+.step { font-size: .76rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: 10px; }
+
+#drop {
+  border: 2px dashed var(--line); border-radius: var(--r);
+  padding: 30px 16px; text-align: center; color: var(--ink-2);
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+#drop:hover, #drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+#drop b { display: block; color: var(--ink); font-size: 1.02rem; margin-bottom: 4px; }
+#drop small { font-size: .84rem; }
+
+button {
+  font: inherit; font-weight: 550; cursor: pointer;
+  background: var(--pane-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 16px;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #17130e; }
+:root[data-theme="light"] button.primary { color: #fff; }
+button.small { padding: 4px 10px; font-size: .84rem; font-weight: 500; }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.src { font-size: .9rem; margin-top: 4px; }
+.srcrow {
+  display: flex; gap: 6px 16px; flex-wrap: wrap;
+  align-items: baseline; justify-content: space-between;
+  padding: 9px 2px; border-bottom: 1px solid var(--line-soft);
+}
+.srcrow:last-child { border-bottom: 0; }
+.srcrow .nm { font-weight: 550; overflow-wrap: anywhere; min-width: 0; }
+.srcrow .num { color: var(--ink-2); }
+.srcrow .bad { color: var(--danger); }
+
+.did { margin: 10px 0 0; padding-left: 20px; }
+.did li { margin: 4px 0; color: var(--ink-2); }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: .88rem; }
+summary:hover { color: var(--ink); }
+.note { font-size: .86rem; color: var(--ink-2); margin-top: 10px; }
+.done { border-color: var(--ok); }
+.done h2 { margin: 0 0 6px; font-size: 1.05rem; }
+pre.report { white-space: pre-wrap; font-size: .82rem; color: var(--ink-2);
+  background: var(--pane-2); border-radius: 8px; padding: 12px; margin: 12px 0 0;
+  max-height: 30vh; overflow: auto; }
+.err { color: var(--danger); }
+#themeBtn { position: fixed; top: 12px; right: 12px; }
+[hidden] { display: none !important; }
+@media (max-width: 560px) {
+  body { padding: 16px 12px 48px; }
+}
+</style>
+</head>
+<body>
+<button id="themeBtn" class="small" type="button">Light</button>
+
+<div class="wrap">
+  <h1>Sulat Merge</h1>
+  <p class="sub">Put in the backup from every device. It works out the rest by itself and gives you one file that has everything &mdash; import that on all of them.</p>
+
+  <div class="card">
+    <div class="step">1 &nbsp;Backups</div>
+    <div id="drop" tabindex="0" role="button">
+      <b>Drop your backup files here</b>
+      <small>or click to choose them &middot; two or more &middot; nothing to decide afterwards</small>
+    </div>
+    <input type="file" id="picker" multiple accept=".json,.gz,application/json,application/gzip" hidden>
+    <div class="src" id="srcTable" hidden></div>
+    <div class="row-btns" id="srcBtns" hidden style="margin-top:12px">
+      <button type="button" class="primary" id="go">Merge into one file</button>
+      <button type="button" class="small" id="clear">Start over</button>
+    </div>
+  </div>
+
+  <div class="card done" id="done" hidden>
+    <div class="step">2 &nbsp;Done</div>
+    <h2 id="doneHead"></h2>
+    <ul class="did" id="did"></ul>
+    <p class="note">Import this on <b>every</b> device &mdash; More &rarr; Backup &amp; transfer &rarr; Import backup &mdash; and they will all match.</p>
+    <details id="detailWrap">
+      <summary>Every note it had to think about</summary>
+      <pre class="report" id="report"></pre>
+    </details>
+    <div class="row-btns" style="margin-top:12px">
+      <button type="button" id="again" class="small">Merge another set</button>
+      <button type="button" id="saveReport" class="small">Save this report</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var BUNDLE_FORMAT = 'sulat-bundle';
+  var BUNDLE_FORMATS = ['sulat-bundle', 'slate-bundle'];
+  var BUNDLE_VERSION = 1;
+  var KIND_ORDER = { text: 0, list: 1, mindmap: 2 };
+
+  function $(id) { return document.getElementById(id); }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  function uid() {
+    return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+  }
+
+  function when(ms) {
+    if (!ms) return 'unknown';
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return 'unknown';
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function shortDate(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  }
+
+  /* ---------------- reading a backup ---------------- */
+
+  function looksGzipped(buf) {
+    var b = new Uint8Array(buf, 0, Math.min(2, buf.byteLength));
+    return b.length === 2 && b[0] === 0x1f && b[1] === 0x8b;
+  }
+
+  function gunzip(blob) {
+    var stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+
+  function gzipText(text) {
+    if (typeof CompressionStream !== 'function') return Promise.resolve(null);
+    try {
+      var s = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+      return new Response(s).blob();
+    } catch (e) { return Promise.resolve(null); }
+  }
+
+  function readFile(file) {
+    return file.arrayBuffer().then(function (buf) {
+      if (looksGzipped(buf)) {
+        if (typeof DecompressionStream !== 'function') {
+          throw new Error('This browser cannot open a compressed backup. Use Chrome or Edge.');
+        }
+        return gunzip(new Blob([buf]));
+      }
+      return new Blob([buf]).text();
+    }).then(function (txt) {
+      var b;
+      try { b = JSON.parse(txt); } catch (e) { throw new Error('Not a valid backup file.'); }
+      if (b && b.format === 'sulat-encrypted') {
+        throw new Error('This backup is encrypted. Export an unencrypted one to merge it.');
+      }
+      if (!b || BUNDLE_FORMATS.indexOf(b.format) < 0) throw new Error('Not a Sulat backup.');
+      if ((b.version || 0) > BUNDLE_VERSION) throw new Error('Made by a newer version of Sulat than this merger knows.');
+      return b;
+    });
+  }
+
+  /* ---------------- pages ----------------
+
+     The page you are looking at does not keep its content in the page list --
+     it lives on the note itself, and `content` is left null. Comparing two
+     copies of a note therefore has to fold the open page back into place
+     first, or a note open on page 1 here and page 2 there looks like two
+     different notes when nothing was actually changed. */
+
+  function emptyContent() {
+    return { body: '', bodyHtml: '', items: [], map: { nodes: [], edges: [] }, imgs: [] };
+  }
+
+  function topContent(n) {
+    return {
+      body: n.body || '', bodyHtml: n.bodyHtml || '',
+      items: n.items || [], map: n.map || { nodes: [], edges: [] },
+      imgs: []
+    };
+  }
+
+  function pageMap(n) {
+    var top = topContent(n);
+    if (!Array.isArray(n.pages) || !n.pages.length) {
+      return { order: ['_one'], byId: { _one: { name: 'Page 1', content: top } }, active: '_one', single: true };
+    }
+    var byId = {}, order = [];
+    var active = n.page;
+    var ids = n.pages.map(function (p) { return p.id; });
+    if (ids.indexOf(active) < 0) active = ids[0];
+    n.pages.forEach(function (p) {
+      order.push(p.id);
+      byId[p.id] = {
+        name: p.name || '',
+        content: p.content || (p.id === active ? top : emptyContent())
+      };
+    });
+    return { order: order, byId: byId, active: active, single: false };
+  }
+
+  function fromPages(base, pm) {
+    var out = clone(base);
+    var act = pm.byId[pm.active] ? pm.byId[pm.active].content : emptyContent();
+    out.body = act.body || '';
+    if (act.bodyHtml) out.bodyHtml = act.bodyHtml; else delete out.bodyHtml;
+    out.items = act.items || [];
+    out.map = act.map || { nodes: [], edges: [] };
+    if (pm.order.length === 1) {
+      delete out.pages;
+      delete out.page;
+      return out;
+    }
+    out.pages = pm.order.map(function (id) {
+      return {
+        id: id === '_one' ? (pm.realOne || (pm.realOne = uid())) : id,
+        name: pm.byId[id].name || '',
+        content: id === pm.active ? null : pm.byId[id].content
+      };
+    });
+    var actId = pm.active === '_one' ? pm.realOne : pm.active;
+    out.page = actId;
+    return out;
+  }
+
+  /* What a page actually holds, with nothing in it that changes when you
+     merely look at it. */
+  function contentKey(c) {
+    c = c || emptyContent();
+    return JSON.stringify({
+      body: c.body || '', bodyHtml: c.bodyHtml || '',
+      items: c.items || [], map: c.map || null
+    });
+  }
+
+  /* A note's content, free of id, times and which folder it sits in. Two
+     notes with the same key hold nothing different from each other. */
+  function noteKey(n) {
+    var pm = pageMap(n);
+    return JSON.stringify({
+      type: n.type || 'text',
+      title: (n.title || '').trim(),
+      tags: (n.tags || []).slice().sort(),
+      images: (n.images || []).slice().sort(),
+      enc: n.enc || null,
+      deleted: !!n.deletedAt,
+      pages: pm.order.map(function (id) {
+        return [pm.byId[id].name || '', contentKey(pm.byId[id].content)];
+      })
+    });
+  }
+
+  /* ---------------- folders ----------------
+
+     Matched on type plus the whole name path, never on id. Two devices that
+     both made a "Work" folder by hand gave it two different ids; matching on
+     id would leave you with two of them for ever. */
+
+  function folderKey(name) { return String(name || '').trim().toLowerCase(); }
+
+  function pathOf(f, byId) {
+    var names = [], guard = 0, x = f;
+    while (x && guard++ < 64) {
+      names.unshift(folderKey(x.name));
+      x = x.parentId ? byId[x.parentId] : null;
+    }
+    return names.join('\u0000');
+  }
+
+  function FolderTable() {
+    this.rows = [];        // the merged folders
+    this.byKey = {};       // 'kind|path' -> id
+    this.byPath = {};      // path -> id, whatever type is sitting there
+    this.byId = {};
+  }
+
+  /* Every file's folders at once, and in a fixed order: the typed ones first,
+     then any from a backup made before folders were split by type.
+
+     The order matters. Taken the other way round, an old untyped "Work" claims
+     the path first, the real typed "Work" then finds nothing of its own type
+     and arrives beside it -- and you end up with two "Work" folders purely
+     because of which backup you happened to put in first. */
+  FolderTable.prototype.absorbAll = function (sources) {
+    var self = this;
+    var maps = sources.map(function () { return {}; });
+    /* Files taken in name order, not the order they were dropped in. Where two
+       files hold the same folder, the first one seen is the one that keeps its
+       id -- so without this the merged file would differ in its folder ids
+       depending on which backup happened to land first, and merging the same
+       pile twice would not give the same file back. */
+    var order = sources.map(function (s, i) { return i; }).sort(function (a, b) {
+      if (sources[a].name === sources[b].name) return a - b;
+      return sources[a].name < sources[b].name ? -1 : 1;
+    });
+    var kinds = Object.keys(KIND_ORDER).sort(function (a, b) {
+      return KIND_ORDER[a] - KIND_ORDER[b];
+    });
+    kinds.forEach(function (kind) {
+      order.forEach(function (i) { self._pass(sources[i].data.folders || [], maps[i], kind); });
+    });
+    order.forEach(function (i) { self._pass(sources[i].data.folders || [], maps[i], null); });
+    return maps;
+  };
+
+  FolderTable.prototype._pass = function (all, idMap, kind) {
+    var self = this;
+    var byId = {};
+    all.forEach(function (f) { if (f && f.id) byId[f.id] = f; });
+
+    var pending = all.filter(function (f) {
+      return f && f.id && !idMap.hasOwnProperty(f.id) && (kind ? f.kind === kind : !f.kind);
+    });
+    var guard = 0;
+
+    function make(f, path, parentId) {
+      var id = self.byId[f.id] ? uid() : f.id;    // two files, two folders, one id
+      idMap[f.id] = id;
+      self.byKey[(kind || '') + '|' + path] = id;
+      if (!self.byPath[path]) self.byPath[path] = id;
+      var row = {
+        id: id, name: f.name, parentId: parentId || null,
+        order: f.order || Date.now(), createdAt: f.createdAt || Date.now()
+      };
+      if (kind) row.kind = kind;
+      if (f.color) row.color = f.color;
+      if (f.pinned) row.pinned = true;
+      self.rows.push(row);
+      self.byId[id] = row;
+    }
+
+    // Parents have to land before their children and a backup does not promise
+    // to list them in that order, so this goes round until nothing moves.
+    while (pending.length && guard++ < 64) {
+      var next = [];
+      pending.forEach(function (f) {
+        if (f.parentId && byId[f.parentId] && !idMap.hasOwnProperty(f.parentId)) {
+          next.push(f);
+          return;
+        }
+        var path = pathOf(f, byId);
+        var parentId = f.parentId ? self.resolve(idMap[f.parentId]) : null;
+
+        if (kind) {
+          var hit = self.byKey[kind + '|' + path];
+          if (hit) { idMap[f.id] = hit; return; }
+        } else if (self.byPath[path]) {
+          /* A folder with no type, from a backup made before the split. It is
+             not a folder of its own: it is whichever of the typed folders at
+             this path the note filed in it turns out to need. */
+          idMap[f.id] = { path: path };
+          return;
+        }
+        make(f, path, parentId);
+      });
+      if (next.length === pending.length) {
+        // a loop in the parents: take what is left as top-level rather than spin
+        next.forEach(function (f) { make(f, pathOf(f, byId), null); });
+        next = [];
+      }
+      pending = next;
+    }
+  };
+
+  // an id, or the folder an untyped one stands for
+  FolderTable.prototype.resolve = function (m) {
+    if (m && typeof m === 'object') return this.byPath[m.path] || null;
+    return m || null;
+  };
+
+  FolderTable.prototype.forNote = function (m, type) {
+    if (m && typeof m === 'object' && m.path) {
+      return this.byKey[(type || 'text') + '|' + m.path] || this.byPath[m.path] || null;
+    }
+    return m || null;
+  };
+
+  /* ---------------- images ---------------- */
+
+  function imagesUsedBy(n) {
+    var ids = [];
+    (n.images || []).forEach(function (i) { ids.push(i); });
+    var pm = pageMap(n);
+    pm.order.forEach(function (id) {
+      var c = pm.byId[id].content || {};
+      (c.imgs || []).forEach(function (i) { ids.push(i); });
+      ((c.map && c.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+      String(c.bodyHtml || '').replace(/data-img="([^"]+)"/g, function (m, i) { ids.push(i); return m; });
+    });
+    return ids;
+  }
+
+  /* ---------------- the merge itself ---------------- */
+
+  /* Everything the merge worked out, before anything is decided. The screen
+     shows this and you say yes; nothing here has changed a single file. */
+  function plan(sources) {
+    var folders = new FolderTable();
+    var maps = folders.absorbAll(sources);
+    var notes = {};          // id -> { note, from, key, seen, clash }
+    var warnings = [];
+
+    sources.forEach(function (src, si) {
+      var fm = maps[si];
+      (src.data.notes || []).forEach(function (raw) {
+        if (!raw || !raw.id) return;
+        var n = clone(raw);
+        if (n.folderId && fm.hasOwnProperty(n.folderId)) {
+          n.folderId = folders.forNote(fm[n.folderId], n.type);
+        }
+        var key = noteKey(n);
+        var have = notes[n.id];
+
+        if (!have) {
+          notes[n.id] = { note: n, from: src.name, key: key, seen: [src.name] };
+          return;
+        }
+        if (have.seen.indexOf(src.name) < 0) have.seen.push(src.name);
+
+        if (key === have.key) {
+          // the same note, unchanged, in another file: nothing to decide
+          if ((n.updatedAt || 0) > (have.note.updatedAt || 0)) {
+            have.note = n;
+            have.from = src.name;
+          }
+          return;
+        }
+
+        var mineAt = have.note.updatedAt || 0, theirsAt = n.updatedAt || 0;
+        /* The later edit wins. Two edits stamped at the very same moment are
+           settled by the name of the file instead, so that the answer can
+           never depend on which backup you happened to put in first. */
+        var takeNew = theirsAt > mineAt || (theirsAt === mineAt && src.name < have.from);
+        var winner = takeNew ? n : have.note;
+        var loser = takeNew ? have.note : n;
+
+        // A page the losing copy has to itself is carried across: a whole
+        // sheet must never vanish because the note it sits in was touched
+        // somewhere else more recently.
+        var carried = carryPages(winner, loser);
+        var winFrom = takeNew ? src.name : have.from;
+        var loseFrom = takeNew ? have.from : src.name;
+        var was = have.clash || { carried: [], how: [], stashed: [] };
+
+        // put the two copies together rather than picking one
+        var fixed = reconcile(carried.note, loser);
+        var note = fixed.note, how = fixed.how, stashed = null;
+        if (!fixed.done && !alreadyHas(note, loser)) {
+          var st = stashAsPage(note, loser, loseFrom);
+          note = st.note;
+          stashed = st.name;
+        }
+
+        have.note = note;
+        have.key = noteKey(note);
+        have.from = winFrom;
+        have.clash = {
+          win: { from: winFrom, at: winner.updatedAt || 0 },
+          lose: { from: loseFrom, at: loser.updatedAt || 0 },
+          carried: was.carried.concat(carried.names),
+          how: was.how.concat(how ? [how] : []),
+          stashed: was.stashed.concat(stashed ? [stashed] : [])
+        };
+      });
+    });
+
+    /* The same note under two ids -- most often a starter note from an older
+       build, before they carried an id of their own. The survivor is the
+       lowest id rather than the first one seen, so merging the same pile of
+       backups twice cannot settle on a different one each time. */
+    var groups = {}, absorbed = 0;
+    Object.keys(notes).forEach(function (id) {
+      (groups[notes[id].key] = groups[notes[id].key] || []).push(id);
+    });
+    Object.keys(groups).forEach(function (k) {
+      var ids = groups[k];
+      if (ids.length < 2) return;
+      ids.sort();
+      var keep = notes[ids[0]];
+      keep.copies = [];
+      ids.slice(1).forEach(function (id) {
+        var other = notes[id];
+        if ((other.note.updatedAt || 0) > (keep.note.updatedAt || 0)) {
+          keep.note.updatedAt = other.note.updatedAt;
+        }
+        other.seen.forEach(function (s) { if (keep.seen.indexOf(s) < 0) keep.seen.push(s); });
+        if (other.clash && !keep.clash) keep.clash = other.clash;
+        keep.copies.push(other.from);
+        delete notes[id];
+        absorbed++;
+      });
+    });
+
+    // one row per decision, newest first
+    var items = Object.keys(notes).map(function (id) {
+      var r = notes[id];
+      var row = {
+        id: id, title: titleOf(r.note), from: r.from, only: r.seen,
+        at: r.note.updatedAt || 0, take: true,
+        copies: r.copies || null,
+        kind: r.clash ? 'clash' : (r.seen.length > 1 ? 'same' : 'new')
+      };
+      if (r.clash) {
+        row.win = r.clash.win;
+        row.lose = r.clash.lose;
+        row.carried = r.clash.carried;
+        row.close = r.clash.close;
+        row.both = false;
+      }
+      return row;
+    }).sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+
+    // images: only those some surviving note still points at
+    var used = {};
+    Object.keys(notes).forEach(function (id) {
+      imagesUsedBy(notes[id].note).forEach(function (i) { used[i] = true; });
+    });
+    var images = {}, missing = 0;
+    sources.forEach(function (src) {
+      (src.data.images || []).forEach(function (im) {
+        if (!im || !im.id || !used[im.id] || images[im.id]) return;
+        if (!im.data) { missing++; return; }   // a snapshot holds ids only
+        images[im.id] = im;
+      });
+    });
+    if (missing) {
+      warnings.push(missing + ' picture(s) are named in a backup but not stored in it. ' +
+        'That happens with an automatic snapshot rather than an exported backup; ' +
+        'those pictures stay on the device that has them.');
+    }
+
+    return {
+      sources: sources, folders: folders, notes: notes,
+      items: items, images: images, warnings: warnings, absorbed: absorbed
+    };
+  }
+
+  function many(n, one, more) {
+    return n + ' ' + (n === 1 ? one : (more || one + 's'));
+  }
+
+  function titleOf(n) {
+    var t = (n.title || '').trim();
+    if (t) return t;
+    if (n.locked || n.enc) return 'Locked note';
+    var body = (n.body || '').trim();
+    if (body) return body.split('\n')[0].slice(0, 60);
+    var first = (n.items || [])[0];
+    if (first && first.text) return String(first.text).slice(0, 60);
+    var node = ((n.map || {}).nodes || [])[0];
+    if (node && node.text) return String(node.text).slice(0, 60);
+    return 'Untitled';
+  }
+
+  /* Two copies of one note that both changed since they parted.
+
+     Nearly always they can be put together with nothing lost and nothing to
+     ask: a list becomes the union of its lines, a map the union of its nodes,
+     and text where one copy merely carries on from the other is simply the
+     longer of the two. Only when the two genuinely say different things is
+     the older wording kept as an extra page on the same note -- so nothing is
+     ever thrown away, and nothing extra turns up in your list of notes. */
+  function reconcile(win, lose) {
+    var out = clone(win);
+
+    if ((out.type || 'text') === 'list') {
+      var seen = {}, items = [];
+      (win.items || []).forEach(function (it) {
+        if (!it) return;
+        if (it.id) seen[it.id] = true;
+        items.push(it);
+      });
+      var added = 0;
+      (lose.items || []).forEach(function (it) {
+        if (!it || (it.id && seen[it.id])) return;
+        items.push(it);
+        added++;
+      });
+      out.items = items;
+      return { note: out, how: added ? 'lines from both' : '', done: true };
+    }
+
+    if ((out.type || 'text') === 'mindmap') {
+      var wm = win.map || { nodes: [], edges: [] };
+      var lm = lose.map || { nodes: [], edges: [] };
+      var known = {}, nodes = [], grew = 0;
+      (wm.nodes || []).forEach(function (n) {
+        if (!n || !n.id) return;
+        known[n.id] = true;
+        nodes.push(n);
+      });
+      (lm.nodes || []).forEach(function (n) {
+        if (!n || !n.id || known[n.id]) return;
+        known[n.id] = true;
+        nodes.push(n);
+        grew++;
+      });
+      var links = {}, edges = [];
+      (wm.edges || []).concat(lm.edges || []).forEach(function (e) {
+        if (!e || !known[e.a] || !known[e.b]) return;
+        var k = e.a + '>' + e.b;
+        if (links[k]) return;
+        links[k] = true;
+        edges.push(e);
+      });
+      out.map = { nodes: nodes, edges: edges };
+      return { note: out, how: grew ? 'nodes from both' : '', done: true };
+    }
+
+    // text: one copy carrying on from the other is not a disagreement
+    var a = String(win.body || ''), b = String(lose.body || '');
+    if (!b || a.indexOf(b) !== -1) return { note: out, how: '', done: true };
+    if (b.indexOf(a) !== -1) {
+      out.body = b;
+      if (lose.bodyHtml) out.bodyHtml = lose.bodyHtml;
+      else delete out.bodyHtml;
+      return { note: out, how: 'the fuller of the two', done: true };
+    }
+    return { note: out, how: '', done: false };
+  }
+
+  /* Has this wording already been kept, on an earlier merge? Every page of
+     the winner is checked, because that is where a previous merge put it.
+     Without this the same older wording would be added again every time the
+     same two backups met, and a note would grow a page per merge. */
+  function alreadyHas(win, lose) {
+    var pm = pageMap(win), lp = pageMap(lose);
+    var want = contentKey(lp.byId[lp.active].content);
+    for (var i = 0; i < pm.order.length; i++) {
+      if (contentKey(pm.byId[pm.order[i]].content) === want) return true;
+    }
+    return false;
+  }
+
+  /* The older wording, kept as a page rather than as a second note. */
+  function stashAsPage(win, lose, fromName) {
+    var pm = pageMap(win), lp = pageMap(lose);
+    var id = uid();
+    var when = shortDate(lose.updatedAt);
+    var name = 'Also on ' + String(fromName).replace(/\.json(\.gz)?$/i, '') +
+      (when ? ', ' + when : '');
+    pm.order.push(id);
+    pm.byId[id] = { name: name, content: lp.byId[lp.active].content };
+    if (pm.order[0] === '_one') pm.realOne = uid();
+    return { note: fromPages(win, pm), name: name };
+  }
+
+  /* Give the winning copy any page the losing one had to itself. */
+  function carryPages(winner, loser) {
+    var w = pageMap(winner), l = pageMap(loser);
+    var extra = l.order.filter(function (id) { return id !== '_one' && !w.byId[id]; });
+    if (!extra.length) return { note: clone(winner), names: [] };
+
+    var pm = { order: w.order.slice(), byId: {}, active: w.active };
+    w.order.forEach(function (id) { pm.byId[id] = w.byId[id]; });
+    var names = [];
+    extra.forEach(function (id) {
+      pm.order.push(id);
+      pm.byId[id] = l.byId[id];
+      names.push(l.byId[id].name || 'a page');
+    });
+    // a single-page note growing a second one needs its first page made real
+    if (pm.order[0] === '_one') pm.realOne = uid();
+    return { note: fromPages(winner, pm), names: names };
+  }
+
+  /* The plan, as the file to save. Nothing here asks anything: every copy
+     of every note is already folded together by the time it arrives. */
+  function build(p) {
+    var notes = [], report = [];
+    var joined = 0, stashed = 0, carried = 0;
+
+    p.items.forEach(function (row) {
+      var rec = p.notes[row.id];
+      if (!rec) return;
+      notes.push(rec.note);
+      var c = rec.clash;
+      if (!c) return;
+      joined++;
+      var line = '  ' + row.title + '  -  ' + c.win.from + ' (' + when(c.win.at) +
+        ') and ' + c.lose.from + ' (' + when(c.lose.at) + ')';
+      if (c.how.length) line += ', took ' + c.how.join(' and ');
+      report.push(line);
+      if (c.carried.length) {
+        carried += c.carried.length;
+        report.push('        pages kept from the other copy: ' + c.carried.join(', '));
+      }
+      if (c.stashed.length) {
+        stashed += c.stashed.length;
+        report.push('        the other wording kept as a page: ' + c.stashed.join(', '));
+      }
+    });
+
+    var used = {};
+    notes.forEach(function (n) { imagesUsedBy(n).forEach(function (i) { used[i] = true; }); });
+    var images = Object.keys(p.images)
+      .filter(function (id) { return used[id]; })
+      .map(function (id) { return p.images[id]; });
+
+    // A folder nothing is filed in is still kept: an empty folder you made on
+    // purpose is not rubbish.
+    var live = notes.filter(function (n) { return !n.deletedAt; }).length;
+
+    var bundle = {
+      format: BUNDLE_FORMAT,
+      version: BUNDLE_VERSION,
+      exportedAt: new Date().toISOString(),
+      counts: { notes: notes.length, folders: p.folders.rows.length, images: images.length },
+      folders: p.folders.rows,
+      notes: notes,
+      imagesInline: true,
+      images: images
+    };
+
+    var head = [];
+    head.push('Sulat Merge  -  ' + when(Date.now()));
+    head.push('');
+    p.sources.forEach(function (s) {
+      var ns = s.data.notes || [];
+      var liveN = ns.filter(function (n) { return !n.deletedAt; }).length;
+      head.push('  ' + s.name + '  -  ' + liveN + ' notes, ' +
+        (s.data.folders || []).length + ' folders, last edit ' + when(s.newest));
+    });
+    head.push('');
+    head.push('  merged  ->  ' + many(live, 'note') + ' (' + (notes.length - live) +
+      ' in the bin), ' + many(p.folders.rows.length, 'folder') + ', ' +
+      many(images.length, 'picture'));
+    if (joined) head.push('  ' + many(joined, 'note') + ' existed in more than one file and were put together');
+    if (carried) head.push('  ' + many(carried, 'page') + ' kept that only one copy had');
+    if (stashed) head.push('  ' + many(stashed, 'note') +
+      ' said two different things, so the older wording is a page inside it');
+    if (p.absorbed) head.push('  ' + many(p.absorbed, 'exact copy', 'exact copies') + ' dropped');
+    p.warnings.forEach(function (w) { head.push('  ! ' + w); });
+    if (report.length) { head.push(''); head.push('Notes that existed in more than one file:'); }
+
+    return {
+      bundle: bundle, report: head.concat(report).join('\n'),
+      live: live, joined: joined, stashed: stashed, carried: carried,
+      absorbed: p.absorbed, folders: p.folders.rows.length, images: images.length
+    };
+  }
+
+  /* ---------------- screen ---------------- */
+
+  var sources = [];
+  var lastReport = '';
+
+  function fileRow(s) {
+    var d = document.createElement('div');
+    d.className = 'srcrow';
+    if (s.error) {
+      d.innerHTML = '<span class="nm">' + esc(s.name) + '</span>' +
+        '<span class="num bad">' + esc(s.error) + '</span>';
+      return d;
+    }
+    var ns = s.data.notes || [];
+    var live = ns.filter(function (n) { return !n.deletedAt; }).length;
+    d.innerHTML = '<span class="nm">' + esc(s.name) + '</span>' +
+      '<span class="num">' + many(live, 'note') + ' &middot; ' +
+      many((s.data.folders || []).length, 'folder') + ' &middot; ' +
+      many((s.data.images || []).length, 'picture') + ' &middot; last edit ' +
+      esc(when(s.newest)) + '</span>';
+    return d;
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function drawSources() {
+    var t = $('srcTable');
+    t.innerHTML = '';
+    sources.forEach(function (s) { t.appendChild(fileRow(s)); });
+    var ok = sources.filter(function (s) { return !s.error; });
+    t.hidden = !sources.length;
+    $('srcBtns').hidden = !sources.length;
+    $('go').disabled = ok.length < 2;
+    $('go').textContent = ok.length < 2
+      ? 'Two backups at least, please'
+      : 'Merge ' + ok.length + ' into one file';
+  }
+
+  function addFiles(list) {
+    var jobs = Array.prototype.slice.call(list).map(function (f) {
+      return readFile(f).then(function (data) {
+        var ns = data.notes || [];
+        var newest = 0;
+        ns.forEach(function (n) { newest = Math.max(newest, n.updatedAt || 0); });
+        return { name: f.name, data: data, newest: newest };
+      }).catch(function (e) {
+        return { name: f.name, error: e.message || String(e) };
+      });
+    });
+    Promise.all(jobs).then(function (loaded) {
+      loaded.forEach(function (s) {
+        var dupe = sources.some(function (x) { return x.name === s.name && !x.error; });
+        if (!dupe) sources.push(s);
+      });
+      $('done').hidden = true;
+      drawSources();
+    });
+  }
+
+  function save(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  function stamp() {
+    var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  }
+
+  /* ---------------- wiring ---------------- */
+
+  var drop = $('drop'), picker = $('picker');
+
+  drop.onclick = function () { picker.click(); };
+  drop.onkeydown = function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); }
+  };
+  picker.onchange = function () {
+    if (picker.files && picker.files.length) addFiles(picker.files);
+    picker.value = '';
+  };
+
+  ['dragenter', 'dragover'].forEach(function (k) {
+    drop.addEventListener(k, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (k) {
+    drop.addEventListener(k, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+  // a file dropped anywhere else must not navigate away from the page
+  window.addEventListener('dragover', function (e) { e.preventDefault(); });
+  window.addEventListener('drop', function (e) { e.preventDefault(); });
+
+  $('clear').onclick = function () {
+    sources = [];
+    drawSources();
+    $('done').hidden = true;
+  };
+
+  $('go').onclick = function () {
+    var ok = sources.filter(function (s) { return !s.error; });
+    if (ok.length < 2) return;
+
+    var out = build(plan(ok));
+    var text = JSON.stringify(out.bundle);
+    lastReport = out.report;
+    $('report').textContent = out.report;
+    $('doneHead').textContent = many(out.live, 'note') + ', ' +
+      many(out.folders, 'folder') + ' and ' + many(out.images, 'picture') + ' in one file.';
+
+    /* What it did, in plain words. Not a list of things to check -- the work
+       is already done and saved. */
+    var did = [];
+    if (out.joined) did.push(many(out.joined, 'note') +
+      ' were in more than one file, and have been put together');
+    if (out.carried) did.push(many(out.carried, 'page') +
+      ' that only one copy had ' + (out.carried === 1 ? 'was' : 'were') + ' kept');
+    if (out.stashed) did.push(many(out.stashed, 'note') +
+      ' said two different things; the older wording is a page inside ' +
+      (out.stashed === 1 ? 'it' : 'them') + ', not lost');
+    if (out.absorbed) did.push(many(out.absorbed, 'exact copy', 'exact copies') +
+      ' dropped');
+    if (!did.length) did.push('Nothing clashed. The files simply added up.');
+    $('did').innerHTML = did.map(function (d) { return '<li>' + esc(d) + '</li>'; }).join('');
+    $('detailWrap').hidden = !out.joined;
+
+    $('done').hidden = false;
+
+    // A big backup is mostly pictures, which gzip barely touches -- but a big
+    // one of mostly words halves. Decided here rather than asked.
+    var base = 'sulat-merged-' + stamp();
+    var finish = function () {
+      $('done').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    if (text.length > 2000000) {
+      gzipText(text).then(function (blob) {
+        if (blob) save(blob, base + '.json.gz');
+        else save(new Blob([text], { type: 'application/json' }), base + '.json');
+        finish();
+      });
+    } else {
+      save(new Blob([text], { type: 'application/json' }), base + '.json');
+      finish();
+    }
+  };
+
+  $('again').onclick = function () { $('clear').click(); window.scrollTo(0, 0); };
+
+  $('saveReport').onclick = function () {
+    save(new Blob([lastReport], { type: 'text/plain' }), 'sulat-merge-report-' + stamp() + '.txt');
+  };
+
+  var themeBtn = $('themeBtn');
+  themeBtn.onclick = function () {
+    var light = document.documentElement.getAttribute('data-theme') === 'light';
+    document.documentElement.setAttribute('data-theme', light ? 'dark' : 'light');
+    themeBtn.textContent = light ? 'Light' : 'Dark';
+    try { localStorage.setItem('sulat-merge-theme', light ? 'dark' : 'light'); } catch (e) {}
+  };
+  try {
+    var saved = localStorage.getItem('sulat-merge-theme');
+    if (saved === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      themeBtn.textContent = 'Dark';
+    }
+  } catch (e) {}
+
+  drawSources();
+})();
+</script>
+</body>
+</html>
