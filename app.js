@@ -3330,6 +3330,27 @@ function toggleImgFree() {
     });
   }
 
+  function renderLayouts() {
+    var sel = $('mapLayout');
+    if (!sel) return;
+    if (!sel.childElementCount) {
+      Object.keys(Mindmap.LAYOUTS).forEach(function (k) {
+        var o = document.createElement('option');
+        o.value = k;
+        o.textContent = Mindmap.LAYOUTS[k];
+        sel.appendChild(o);
+      });
+      sel.onchange = function () {
+        commitNodeEdit();            // the edit box cannot follow a node that moves
+        S.map.setLayout(sel.value);
+        $('autoBtn').classList.toggle('on', !!S.map.auto);
+        S.map.fit();
+        focusMap();
+      };
+    }
+    sel.value = S.map.layout || 'right';
+  }
+
   function renderEdgeTypes() {
     var sel = $('mapEdgeType');
     if (!sel || sel.childElementCount) return;
@@ -3570,6 +3591,7 @@ function toggleImgFree() {
     renderSwatches();
     renderShapeSwatches();
     renderEdgeTypes();
+    renderLayouts();
     var cc = $('customColor');
     if (cc && !cc.dataset.wired) {
       cc.dataset.wired = '1';
@@ -5507,7 +5529,14 @@ function toggleImgFree() {
       });
     },
 
-    'map-add': function () { S.map.addNode(); focusMap(); },
+    'map-add': function () {
+      // with a node selected this adds under it, which is what you mean
+      // nine times in ten; with nothing selected it starts a fresh one
+      var made = S.map.selected ? S.map.addChild() : S.map.addNode();
+      S.map.reveal(made);
+      if (made && S.map.opts.onRename) S.map.opts.onRename(made, true);
+      focusMap();
+    },
     'map-child': function () {
       if (!S.map.selected) { toast('Select a node first.'); return; }
       var n = S.map.addChild();

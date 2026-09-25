@@ -19,6 +19,13 @@
   /* How far a new child sits from its parent. The vertical figure was 72 and
      fixed, which left a lot of air between siblings on anything but a crowded
      map -- and no way to close it. */
+  var LAYOUTS = {
+    right: 'To the right',
+    left: 'To the left',
+    both: 'Both sides',
+    down: 'Downwards'
+  };
+
   var GAP_X_DEFAULT = 120;
   var GAP_Y_DEFAULT = 52;
   var EDGE_HIT = 9;          // px from a curve that still counts as a click
@@ -228,6 +235,7 @@
     /* Auto-arrange: on for anything new, so a map never turns into a heap.
        A map that was built by hand keeps the setting it was saved with. */
     this.auto = st.auto === undefined ? this.nodes.length <= 1 : !!st.auto;
+    this.layout = LAYOUTS[st.layout] ? st.layout : 'right';
     this.selected = null;
     this.selection = [];
     this.selectedEdge = null;
@@ -258,9 +266,12 @@
         if (e.w) o.w = e.w;
         return o;
       }),
-      style: this.auto
-        ? { type: this.style.type, width: this.style.width, auto: true }
-        : { type: this.style.type, width: this.style.width }
+      style: {
+        type: this.style.type,
+        width: this.style.width,
+        auto: this.auto || undefined,
+        layout: this.layout === 'right' ? undefined : this.layout
+      }
     };
   };
 
@@ -605,14 +616,25 @@
     /* In a tidy map every child sits to the right of its parent, so the line
        leaves the parent's side and arrives at the child's, like a chart --
        rather than pointing at the middle of each box. */
-    if (this.auto && b.x > a.x + a.w / 2) {
-      var pa2 = { x: a.x + a.w / 2, y: a.y };
-      var pb2 = { x: b.x - b.w / 2, y: b.y };
-      var reach = Math.max(18, (pb2.x - pa2.x) * 0.55);
+    if (this.auto && b.y > a.y + a.h / 2 && this.layout === 'down') {
+      var pd1 = { x: a.x, y: a.y + a.h / 2 };
+      var pd2 = { x: b.x, y: b.y - b.h / 2 };
+      var drop = Math.max(14, (pd2.y - pd1.y) * 0.55);
+      return {
+        a: pd1, b: pd2,
+        c1: { x: pd1.x, y: pd1.y + drop },
+        c2: { x: pd2.x, y: pd2.y - drop }
+      };
+    }
+    if (this.auto && this.layout !== 'down' && Math.abs(b.x - a.x) > (a.w + b.w) / 4) {
+      var side = b.x > a.x ? 1 : -1;
+      var pa2 = { x: a.x + side * a.w / 2, y: a.y };
+      var pb2 = { x: b.x - side * b.w / 2, y: b.y };
+      var reach = Math.max(18, Math.abs(pb2.x - pa2.x) * 0.55);
       return {
         a: pa2, b: pb2,
-        c1: { x: pa2.x + reach, y: pa2.y },
-        c2: { x: pb2.x - reach, y: pb2.y }
+        c1: { x: pa2.x + side * reach, y: pa2.y },
+        c2: { x: pb2.x - side * reach, y: pb2.y }
       };
     }
     var pa = borderPoint(a, b), pb = borderPoint(b, a);
@@ -750,10 +772,11 @@
     var p = parent || this.selected;
     if (!p) return this.addNode();
     var kids = this.edges.filter(function (e) { return e.a === p.id; }).length;
+    var away = this.layout === 'left' ? -1 : 1;
     var n = {
       id: DB.uid(),
       text: 'Idea',
-      x: p.x + p.w / 2 + this.gapX,
+      x: p.x + away * (p.w / 2 + this.gapX),
       y: p.y + (kids ? (kids % 2 ? 1 : -1) * Math.ceil(kids / 2) * this.gapY : 0),
       color: p.color || 'plain',       // children inherit the parent's colour
       image: null,
@@ -860,6 +883,8 @@
     });
     var gx = Math.max(28, Math.round(this.gapX * 0.45));
     var gy = Math.max(6, Math.round(this.gapY * 0.22));
+    var dir = LAYOUTS[this.layout] ? this.layout : 'right';
+    var down = dir === 'down';
 
     // each node belongs to the first parent that reaches it; extra links stay links
     var seen = {}, tree = {};
@@ -873,40 +898,104 @@
       own.forEach(build);
     }
     var roots = this.nodes.filter(function (n) { return !hasParent[n.id]; })
-      .sort(function (a, b) { return a.y - b.y; });
+      .sort(function (a, b) { return down ? a.x - b.x : a.y - b.y; });
     roots.forEach(function (r) { if (!seen[r.id]) build(r.id); });
     // anything only reachable round a loop starts a tree of its own
     this.nodes.forEach(function (n) {
       if (!seen[n.id]) { roots.push(n); build(n.id); }
     });
+    // brothers and sisters keep the order they appear in on screen
     Object.keys(tree).forEach(function (id) {
-      tree[id].sort(function (a, b) { return byId[a].y - byId[b].y; });
+      tree[id].sort(function (a, b) {
+        return down ? byId[a].x - byId[b].x : byId[a].y - byId[b].y;
+      });
     });
 
+    /* A branch is measured across the way it grows: a map growing sideways
+       needs height for each branch, one growing downwards needs width. */
     var band = {};
-    function height(id) {
+    function measure(id) {
       var total = 0;
-      tree[id].forEach(function (c, i) { total += height(c) + (i ? gy : 0); });
-      band[id] = Math.max(byId[id].h, total);
+      tree[id].forEach(function (c, i) {
+        total += measure(c) + (i ? (down ? gx : gy) : 0);
+      });
+      band[id] = Math.max(down ? byId[id].w : byId[id].h, total);
       return band[id];
     }
-    function place(id, left, top) {
+
+    // sideways: `edge` is the side of the node facing its parent
+    function placeSide(id, edge, top, sign) {
       var n = byId[id];
-      n.x = left + n.w / 2;
+      n.x = edge + sign * n.w / 2;
       n.y = top + band[id] / 2;
       var total = 0;
       tree[id].forEach(function (c, i) { total += band[c] + (i ? gy : 0); });
-      var y = n.y - total / 2, x = left + n.w + gx;
-      tree[id].forEach(function (c) { place(c, x, y); y += band[c] + gy; });
+      var y = n.y - total / 2;
+      var next = n.x + sign * (n.w / 2 + gx);
+      tree[id].forEach(function (c) {
+        placeSide(c, next, y, sign);
+        y += band[c] + gy;
+      });
     }
-    roots.forEach(function (r) { height(r.id); });
-    // the top tree stays where it is on screen; any others stack beneath it
+
+    function placeDown(id, left, topY) {
+      var n = byId[id];
+      n.x = left + band[id] / 2;
+      n.y = topY + n.h / 2;
+      var total = 0;
+      tree[id].forEach(function (c, i) { total += band[c] + (i ? gx : 0); });
+      var x = n.x - total / 2;
+      var below = topY + n.h + gy * 3;
+      tree[id].forEach(function (c) {
+        placeDown(c, x, below);
+        x += band[c] + gx;
+      });
+    }
+
+    // both sides: the root's branches are split left and right, then each
+    // side is laid out as its own little map
+    function placeBoth(id) {
+      var n = byId[id];
+      var own = tree[id].slice();
+      var right = [], left = [];
+      own.forEach(function (c, i) { (i % 2 ? left : right).push(c); });
+      [[right, 1], [left, -1]].forEach(function (pair) {
+        var list = pair[0], sign = pair[1];
+        var total = 0;
+        list.forEach(function (c, i) { total += band[c] + (i ? gy : 0); });
+        var y = n.y - total / 2;
+        var edge = n.x + sign * (n.w / 2 + gx);
+        list.forEach(function (c) {
+          placeSide(c, edge, y, sign);
+          y += band[c] + gy;
+        });
+      });
+    }
+
+    roots.forEach(function (r) { measure(r.id); });
     var first = roots[0];
-    var left = first.x - first.w / 2, top = first.y - band[first.id] / 2;
-    roots.forEach(function (r) {
-      place(r.id, left, top);
-      top += band[r.id] + gy * 4;
-    });
+    if (down) {
+      var left = first.x - band[first.id] / 2, topY = first.y - first.h / 2;
+      roots.forEach(function (r) {
+        placeDown(r.id, left, topY);
+        left += band[r.id] + gx * 3;
+      });
+    } else if (dir === 'both') {
+      var cy = first.y;
+      roots.forEach(function (r) {
+        byId[r.id].y = cy;
+        placeBoth(r.id);
+        cy += band[r.id] + gy * 4;
+      });
+    } else {
+      var sign = dir === 'left' ? -1 : 1;
+      var edge = first.x + sign * (-first.w / 2);
+      var top = first.y - band[first.id] / 2;
+      roots.forEach(function (r) {
+        placeSide(r.id, edge, top, sign);
+        top += band[r.id] + gy * 4;
+      });
+    }
 
     // anything that moved glides there rather than jumping
     var now = Date.now();
@@ -917,6 +1006,13 @@
       n._from = old;
       n._t0 = now;
     });
+  };
+
+  Mindmap.prototype.setLayout = function (name) {
+    this.layout = LAYOUTS[name] ? name : 'right';
+    if (!this.auto) this.auto = true;      // a layout only means anything tidied
+    this._changed();
+    return this.layout;
   };
 
   /* Hang a node (and everything under it) under another one. */
@@ -2163,6 +2259,7 @@
   Mindmap.SHAPES = SHAPES;
   Mindmap.SHAPE_KEYS = SHAPE_KEYS;
   Mindmap.EDGE_TYPES = EDGE_TYPES;
+  Mindmap.LAYOUTS = LAYOUTS;
   Mindmap.EDGE_KEYS = EDGE_KEYS;
   global.Mindmap = Mindmap;
 })(window);
