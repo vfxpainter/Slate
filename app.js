@@ -3508,8 +3508,10 @@ function toggleImgFree() {
     });
     $('mapColors').classList.toggle('dimmed', !any);
 
-    var rm = document.querySelector('[data-act="map-image-remove"]');
-    if (rm) rm.hidden = !(one && node && node.image);
+    Array.prototype.forEach.call(
+      document.querySelectorAll('[data-act="map-image-remove"]'), function (rm) {
+        rm.hidden = !(one && node && node.image);
+      });
 
     Array.prototype.forEach.call($('mapColors').children, function (b) {
       b.classList.toggle('on', one && (node.color || 'plain') === b.dataset.color);
@@ -3520,6 +3522,10 @@ function toggleImgFree() {
       tag.textContent = count > 1 ? plural(count, 'node') + ' selected' : '';
       tag.hidden = count < 2;
     }
+
+    renderFoldBtn(one ? node : null);
+    var bb = $('branchBtn');
+    if (bb && S.map) bb.classList.toggle('on', !!S.map.branchColors);
 
     // shape and text size follow the same rule as colour: any selection will do
     $('mapShapes').classList.toggle('dimmed', !any);
@@ -3567,13 +3573,13 @@ function toggleImgFree() {
      where there is room; on a phone the icons alone make one short row, and
      every button keeps its name as a tooltip and for screen readers. */
   var MAP_ICONS = {
-    'map-sibling': '<rect x="2.5" y="4" width="19" height="6.5" rx="2"/><rect x="2.5" y="13.5" width="19" height="6.5" rx="2"/><path d="M12 15.2v3M10.5 16.7h3"/>',
-    'map-child': '<rect x="2.5" y="9" width="7" height="6" rx="2"/><rect x="15.5" y="3.5" width="6" height="5" rx="1.5"/><rect x="15.5" y="15.5" width="6" height="5" rx="1.5"/><path d="M9.5 12h3M12.5 6v12M12.5 6h3M12.5 18h3"/>',
+    'map-sibling': '<rect x="8" y="3" width="13" height="6" rx="1.8"/><rect x="8" y="13" width="13" height="6" rx="1.8"/><path d="M4 6h4M4 16h4M4 6v10"/><path d="M14.5 21.5v-2.5"/>',
+    'map-child': '<rect x="2" y="9" width="8" height="6" rx="1.8"/><rect x="14" y="9" width="8" height="6" rx="1.8"/><path d="M10 12h4"/><path d="M18 6.5v-3M16.5 5h3"/>',
     'map-rename': '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     'map-select-mode': '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2.6"/>',
     'map-link': '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4"/>',
     'map-image': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8 8"/>',
-    'map-image-remove': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M9 9l6 6M15 9l-6 6"/>',
+    'map-image-remove': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M3.5 16l4-4 3 3"/><path d="M13.5 10.5l6 6M19.5 10.5l-6 6"/>',
     'map-copy': '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
     'map-paste': '<rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3.5h6V5M9 11h6M9 15h4"/>',
     'map-duplicate': '<rect x="3" y="3" width="12" height="12" rx="2"/><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M15 12.5v5M12.5 15h5"/>',
@@ -3583,7 +3589,10 @@ function toggleImgFree() {
     'map-zoom-in': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M8 11h6M11 8v6"/>',
     'map-fit': '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
     'map-auto': '<rect x="2.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="3.5" width="6" height="4" rx="1"/><rect x="15.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="16.5" width="6" height="4" rx="1"/><path d="M8.5 12h7M12 5.5v13M12 5.5h3.5M12 18.5h3.5"/>',
-    'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>'
+    'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>',
+    'map-fold': '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
+    'map-find': '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/>',
+    'map-present': '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M12 16.5v3M8.5 19.5h7"/><path d="M10.5 8.5l4 2-4 2z"/>'
   };
 
   /* The buttons under the map say what they do in a picture. Reading
@@ -3598,6 +3607,18 @@ function toggleImgFree() {
       b.textContent = '';
       b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
     });
+  }
+
+  /* The fold button follows whatever is selected: there is nothing to fold on
+     a node with no children, and once folded the same button opens it again. */
+  function renderFoldBtn(node) {
+    var b = document.querySelector('#mapQuick [data-act="map-fold"]');
+    if (!b || !S.map) return;
+    var can = node && S.map.descendantsOf(node).length;
+    b.disabled = !can;
+    b.classList.toggle('on', !!(node && node.collapsed));
+    b.title = !can ? 'Nothing under this one to fold'
+      : (node.collapsed ? 'Open this branch' : 'Fold this branch away');
   }
 
   function decorateMapTools() {
@@ -3651,6 +3672,155 @@ function toggleImgFree() {
     if (wrap) wrap.addEventListener('pointerdown', hideNodeMenu, true);
     window.addEventListener('resize', hideNodeMenu);
     window.addEventListener('blur', hideNodeMenu);
+  }
+
+
+  /* ---------- find and replace, inside one map ---------- */
+
+  function mapFindDialog() {
+    if (!S.map) return;
+    showDlg(
+      '<h3>Find in this map</h3>' +
+      '<p class="sub">Matches are counted as you type. Replace changes every one of them.</p>' +
+      '<label class="fld" for="mfFind">Find</label>' +
+      '<input id="mfFind" autocomplete="off" spellcheck="false">' +
+      '<label class="fld" for="mfRep">Replace with</label>' +
+      '<input id="mfRep" autocomplete="off" spellcheck="false">' +
+      '<p class="sub" id="mfCount">&nbsp;</p>' +
+      '<div class="dlg-actions"><button class="btn" data-x="c">Close</button>' +
+      '<button class="btn" data-x="next">Next</button>' +
+      '<button class="btn solid" data-x="rep">Replace all</button></div>',
+      function (root) {
+        var find = root.querySelector('#mfFind');
+        var rep = root.querySelector('#mfRep');
+        var line = root.querySelector('#mfCount');
+        var at = -1;
+
+        function matches() {
+          var q = find.value.trim().toLowerCase();
+          if (!q) return [];
+          return S.map.nodes.filter(function (n) {
+            return String(n.text || '').toLowerCase().indexOf(q) !== -1;
+          });
+        }
+        function count() {
+          var m = matches();
+          line.textContent = !find.value.trim() ? '\u00a0'
+            : (m.length ? plural(m.length, 'node') + ' match' : 'Nothing matches');
+          return m;
+        }
+        find.oninput = function () { at = -1; count(); };
+        find.focus();
+
+        root.querySelector('[data-x="c"]').onclick = closeDlg;
+        root.querySelector('[data-x="next"]').onclick = function () {
+          var m = count();
+          if (!m.length) return;
+          at = (at + 1) % m.length;
+          S.map.select(m[at]);
+          S.map.reveal(m[at]);
+        };
+        root.querySelector('[data-x="rep"]').onclick = function () {
+          var q = find.value.trim();
+          if (!q) return;
+          var m = matches();
+          if (!m.length) { count(); return; }
+          closeDlg();
+          var needle = q.toLowerCase();
+          (function () {
+            m.forEach(function (n) {
+              var out = '', src = String(n.text || ''), i = 0;
+              while (i < src.length) {
+                if (src.substr(i, needle.length).toLowerCase() === needle) {
+                  out += rep.value;
+                  i += needle.length;
+                } else {
+                  out += src[i];
+                  i++;
+                }
+              }
+              n.text = out;
+            });
+            S.map._layout();
+            S.map._changed();
+          }());
+          toast('Replaced in ' + plural(m.length, 'node'));
+        };
+      }
+    );
+  }
+
+  /* ---------- presentation ----------
+     One branch at a time, filling the screen. No editing, no tools: just the
+     map, read out loud by the person holding the phone. */
+  function startPresenting() {
+    if (!S.map || !S.map.nodes.length) return;
+    var order = presentOrder();
+    if (!order.length) return;
+    var at = 0;
+    var box = $('mapEditor');
+    box.classList.add('presenting');
+
+    var bar = el('div', 'present-bar');
+    var prev = el('button', 'present-btn', '\u2039');
+    var label = el('span', 'present-at');
+    var next = el('button', 'present-btn', '\u203a');
+    var done = el('button', 'present-btn', 'Done');
+    [prev, label, next, done].forEach(function (x) { bar.appendChild(x); });
+    box.appendChild(bar);
+
+    function show() {
+      var n = order[at];
+      S.map.select(n);
+      S.map.reveal(n);
+      label.textContent = (at + 1) + ' / ' + order.length;
+    }
+    function stop() {
+      box.classList.remove('presenting');
+      bar.remove();
+      document.removeEventListener('keydown', keys, true);
+      S.map.fit();
+      focusMap();
+    }
+    function keys(e) {
+      if (e.key === 'Escape') { e.preventDefault(); stop(); return; }
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        e.preventDefault();
+        at = Math.min(order.length - 1, at + 1);
+        show();
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        at = Math.max(0, at - 1);
+        show();
+      }
+    }
+    prev.onclick = function () { at = Math.max(0, at - 1); show(); };
+    next.onclick = function () { at = Math.min(order.length - 1, at + 1); show(); };
+    done.onclick = stop;
+    document.addEventListener('keydown', keys, true);
+    show();
+  }
+
+  // the order a reader would take: each root, then down each branch in turn
+  function presentOrder() {
+    var m = S.map, byId = {}, kids = {}, hasParent = {};
+    m.nodes.forEach(function (n) { byId[n.id] = n; });
+    m.edges.forEach(function (e) {
+      if (!byId[e.a] || !byId[e.b]) return;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+      hasParent[e.b] = true;
+    });
+    var out = [], seen = {};
+    function walk(id) {
+      if (seen[id]) return;
+      seen[id] = true;
+      out.push(byId[id]);
+      (kids[id] || []).forEach(walk);
+    }
+    m.nodes.forEach(function (n) { if (!hasParent[n.id]) walk(n.id); });
+    m.nodes.forEach(function (n) { if (!seen[n.id]) walk(n.id); });
+    return out;
   }
 
   function mountMap() {
@@ -5913,6 +6083,24 @@ function toggleImgFree() {
       focusMap();
     },
     'map-fit': function () { S.map.fit(); focusMap(); },
+    'map-fold': function () {
+      if (!S.map || !S.map.selected) return;
+      if (!S.map.toggleCollapse(S.map.selected)) {
+        toast('Nothing under that one to fold');
+        return;
+      }
+      renderMapTools(S.map.selected);
+      focusMap();
+    },
+    'map-branch': function () {
+      S.map.branchColors = !S.map.branchColors;
+      $('branchBtn').classList.toggle('on', S.map.branchColors);
+      S.map._changed();
+      toast(S.map.branchColors ? 'A colour for each branch' : 'One colour for every line');
+      focusMap();
+    },
+    'map-find': function () { mapFindDialog(); },
+    'map-present': function () { startPresenting(); },
     'map-auto': function () {
       S.map.setAuto(!S.map.auto);
       $('autoBtn').classList.toggle('on', S.map.auto);
@@ -6861,6 +7049,12 @@ function toggleImgFree() {
       }
       if (mod && e.key.toLowerCase() === 'l') {
         if (S.note && S.note.type === 'mindmap') { e.preventDefault(); toggleLinkMode(); }
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'f' && !typing &&
+          S.map && !$('mapEditor').hidden) {
+        e.preventDefault();            // the browser's own find cannot see a canvas
+        mapFindDialog();
         return;
       }
       if (mod && e.key.toLowerCase() === 'z') {

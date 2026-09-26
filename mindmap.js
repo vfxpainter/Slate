@@ -30,6 +30,8 @@
   var GAP_Y_DEFAULT = 52;
   var EDGE_HIT = 9;          // px from a curve that still counts as a click
   var DRAG_SLOP = 4;         // px before a press becomes a drag
+  var KISS = 10;             // world px of daylight that still counts as touching
+  var PULL = 54;             // how far a node must be pulled before it lets go
 
   /* Node colours. Each entry carries a light and a dark fill so a map looks
      right in both themes, plus a border that reads on either. */
@@ -58,6 +60,7 @@
   var SHAPE_KEYS = Object.keys(SHAPES);
 
   var EDGE_TYPES = {
+    elbow: 'Elbow',
     curve:    'Curved',
     straight: 'Straight',
     sketch:   'Hand-drawn',
@@ -65,6 +68,11 @@
     tapered:  'Tapered'
   };
   var EDGE_KEYS = Object.keys(EDGE_TYPES);
+
+  /* One colour per branch off the middle, so you can tell at a glance which
+     limb a node belongs to. Deliberately the same hues as the node palette. */
+  var BRANCH_COLORS = ['#d98a3d', '#7fa85a', '#5b93c9', '#b06fa8', '#d0705f',
+                       '#4fa5a0', '#c9a23d', '#8a7fd0'];
   var DEF_EDGE = { type: 'curve', width: 1.8 };
 
   /* A node's colour is either a palette key or a plain hex the user picked.
@@ -216,6 +224,8 @@
         fs: n.fs || 0,           // per-node font size; 0 = follow the app setting
         w0: n.w0 || 0,           // manual width;  0 = size to content
         h0: n.h0 || 0,           // manual height; 0 = size to content
+        collapsed: !!n.collapsed, // its branch is folded away behind a handle
+        free: !!n.free,          // put here by hand; auto-arrange leaves it be
         noteId: n.noteId || null // reserved: the note this node stands for
       };
     });
@@ -242,6 +252,8 @@
     this.selectMode = false;
     this._marquee = null;
     this.linkFrom = null;
+    this.branchColors = st.branch === undefined ? this.nodes.length <= 1 : !!st.branch;
+    this._branches = null;
     this._ensureImages();
     this._layout();
     this._prune();
@@ -257,6 +269,8 @@
         if (n.fs) o.fs = Math.round(n.fs);
         if (n.w0) o.w0 = Math.round(n.w0);
         if (n.h0) o.h0 = Math.round(n.h0);
+        if (n.collapsed) o.collapsed = true;
+        if (n.free) o.free = true;
         if (n.noteId) o.noteId = n.noteId;
         return o;
       }),
@@ -270,6 +284,7 @@
         type: this.style.type,
         width: this.style.width,
         auto: this.auto || undefined,
+        branch: this.branchColors ? true : undefined,
         layout: this.layout === 'right' ? undefined : this.layout
       }
     };
@@ -322,6 +337,7 @@
   };
 
   Mindmap.prototype._changed = function () {
+    this._branches = null;
     this._prune();
     if (this.auto) this.arrange();
     if (this.opts.onChange) this.opts.onChange();
@@ -476,9 +492,57 @@
     return depth;
   };
 
+  /* Everything folded away: the children of a collapsed node, and theirs,
+     all the way down. Worked out once per layout and read everywhere else --
+     drawing, hit testing, arranging and fitting all have to agree about what
+     is on screen. */
+  Mindmap.prototype._hiddenMap = function () {
+    var kids = {}, byId = {};
+    this.nodes.forEach(function (n) { byId[n.id] = n; });
+    this.edges.forEach(function (e) {
+      if (byId[e.a] && byId[e.b]) (kids[e.a] = kids[e.a] || []).push(e.b);
+    });
+    var hidden = {}, seen = {};
+    var walk = function (id, under) {
+      if (seen[id]) return;
+      seen[id] = true;
+      if (under) hidden[id] = true;
+      var fold = under || !!(byId[id] && byId[id].collapsed);
+      (kids[id] || []).forEach(function (c) { walk(c, fold); });
+    };
+    var hasParent = {};
+    this.edges.forEach(function (e) { if (byId[e.b]) hasParent[e.b] = true; });
+    this.nodes.forEach(function (n) { if (!hasParent[n.id]) walk(n.id, false); });
+    this.nodes.forEach(function (n) { if (!seen[n.id]) walk(n.id, false); });
+    return hidden;
+  };
+
+  // how many nodes are folded away under this one
+  Mindmap.prototype.hiddenUnder = function (node) {
+    return node ? this.descendantsOf(node).length : 0;
+  };
+
+  Mindmap.prototype.toggleCollapse = function (node) {
+    if (!node) return false;
+    if (!this.descendantsOf(node).length) return false;
+    node.collapsed = !node.collapsed;
+    if (node.collapsed) {
+      // nothing folded away may stay selected, or the tools would act on
+      // something you cannot see
+      var gone = this.descendantsOf(node);
+      this.selection = this.selection.filter(function (s) { return gone.indexOf(s) === -1; });
+      this.selected = this.selection[this.selection.length - 1] || null;
+      if (this.opts.onSelect) this.opts.onSelect(this.selected);
+    }
+    this._layout();
+    this._changed();
+    return true;
+  };
+
   Mindmap.prototype._layout = function () {
     var ctx = this.ctx;
     var depth = this._depthMap();
+    this._hidden = this._hiddenMap();
     for (var i = 0; i < this.nodes.length; i++) {
       var n = this.nodes[i];
       var shape = SHAPES[n.shape] || SHAPES.round;
@@ -497,11 +561,27 @@
 
       var im = n.image ? this._imgCache[n.image] : null;
       if (im && im !== 'loading' && im.naturalWidth) {
-        var cap = inner || IMG_MAX_W;
-        var capH = inner ? IMG_MAX_H * 3 : IMG_MAX_H;
-        var scale = Math.min(cap / im.naturalWidth, capH / im.naturalHeight, inner ? 6 : 1);
-        n.imgW = Math.round(im.naturalWidth * scale);
-        n.imgH = Math.round(im.naturalHeight * scale);
+        var ratio = im.naturalWidth / im.naturalHeight;
+        if (inner) {
+          /* The box has been given a width, so the picture fills it -- and
+             keeps filling it however large the box is dragged. It used to
+             stop growing at a fixed ceiling, which made a node you had
+             deliberately made big hold a small picture in a sea of space. */
+          var iw = inner, ih = iw / ratio;
+          if (n.h0) {
+            // a height was set as well: fit inside it, still in proportion
+            var room = n.h0 / shape.padY - PAD_Y * 2 -
+                       (n.lines.length ? n.lines.length * n._lh + IMG_GAP : 0);
+            if (room > 12 && ih > room) { ih = room; iw = ih * ratio; }
+          }
+          n.imgW = Math.round(iw);
+          n.imgH = Math.round(ih);
+        } else {
+          // sized to its own content: a sensible size to start from
+          var scale = Math.min(IMG_MAX_W / im.naturalWidth, IMG_MAX_H / im.naturalHeight, 1);
+          n.imgW = Math.round(im.naturalWidth * scale);
+          n.imgH = Math.round(im.naturalHeight * scale);
+        }
       } else if (n.image) {
         // not loaded yet: reserve a box in the right shape, square if unknown
         var ar = this._ratio[n.image] || 1;
@@ -583,6 +663,7 @@
     for (var i = this.nodes.length - 1; i >= 0; i--) {
       var n = this.nodes[i];
       if (skip && skip.indexOf(n) !== -1) continue;
+      if (this._hidden && this._hidden[n.id]) continue;
       if (p.x >= n.x - n.w / 2 && p.x <= n.x + n.w / 2 &&
           p.y >= n.y - n.h / 2 && p.y <= n.y + n.h / 2) return n;
     }
@@ -621,7 +702,7 @@
       var pd2 = { x: b.x, y: b.y - b.h / 2 };
       var drop = Math.max(14, (pd2.y - pd1.y) * 0.55);
       return {
-        a: pd1, b: pd2,
+        a: pd1, b: pd2, down: true,
         c1: { x: pd1.x, y: pd1.y + drop },
         c2: { x: pd2.x, y: pd2.y - drop }
       };
@@ -666,6 +747,7 @@
 
   var HANDLE_R = 6;      // world-space radius of a connector dot
   var GRIP = 9;          // resize grip square
+  var FOLD_R = 9;        // the circle that folds a branch away
 
   // Connector dots sit at the middle of each side.
   Mindmap.prototype.handlePoints = function (n) {
@@ -701,6 +783,41 @@
     return null;
   };
 
+  /* Where the fold handle sits: on the edge of the node facing its
+     children, so it reads as the branch's own button rather than the node's. */
+  Mindmap.prototype.foldPoint = function (n) {
+    if (!n || !this.descendantsOf(n).length) return null;
+    var kids = [], self = this;
+    this.edges.forEach(function (e) {
+      if (e.a === n.id) { var k = self.byId(e.b); if (k) kids.push(k); }
+    });
+    if (!kids.length) return null;
+    var cx = 0, cy = 0;
+    kids.forEach(function (k) { cx += k.x; cy += k.y; });
+    cx /= kids.length; cy /= kids.length;
+    if (this.layout === 'down' && this.auto) {
+      return { x: n.x, y: n.y + n.h / 2 };
+    }
+    var side = cx >= n.x ? 1 : -1;
+    // a collapsed node's children sit on top of it, so fall back to the way
+    // the map grows rather than to wherever they happen to be
+    if (n.collapsed) side = this.layout === 'left' ? -1 : 1;
+    return { x: n.x + side * n.w / 2, y: n.y };
+  };
+
+  Mindmap.prototype.hitFold = function (px, py) {
+    var p = this.toWorld(px, py);
+    var r = Math.max(7, FOLD_R / this.cam.s);
+    for (var i = this.nodes.length - 1; i >= 0; i--) {
+      var n = this.nodes[i];
+      if (this._hidden && this._hidden[n.id]) continue;
+      var pt = this.foldPoint(n);
+      if (!pt) continue;
+      if (Math.hypot(p.x - pt.x, p.y - pt.y) <= r * 1.35) return n;
+    }
+    return null;
+  };
+
   Mindmap.prototype.hitGrip = function (px, py) {
     var n = this.handleNode();
     if (!n) return null;
@@ -711,6 +828,42 @@
   };
 
   // Nodes overlapping the marquee rectangle (drawn in any direction).
+  /* The node the dragged one is touching, if any.
+
+     Not "the pointer is inside that node" but "the two boxes have met", with a
+     little daylight allowed, because that is what it looks like you are doing
+     when you push one node up against another. Where several are touching, the
+     nearest middle wins, so pushing into a crowd still picks one. */
+  Mindmap.prototype.kissing = function (node, skip) {
+    if (!node) return null;
+    var ax0 = node.x - node.w / 2 - KISS, ax1 = node.x + node.w / 2 + KISS;
+    var ay0 = node.y - node.h / 2 - KISS, ay1 = node.y + node.h / 2 + KISS;
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < this.nodes.length; i++) {
+      var m = this.nodes[i];
+      if (m === node) continue;
+      if (this._hidden && this._hidden[m.id]) continue;
+      if (skip && skip.indexOf(m) !== -1) continue;
+      if (m.x + m.w / 2 < ax0 || m.x - m.w / 2 > ax1) continue;
+      if (m.y + m.h / 2 < ay0 || m.y - m.h / 2 > ay1) continue;
+      var d = Math.hypot(m.x - node.x, m.y - node.y);
+      if (d < bestD) { bestD = d; best = m; }
+    }
+    return best;
+  };
+
+  /* Cut a node loose from whatever it hangs off, quietly -- no re-arrange, no
+     save. Returns the edge removed so a cancelled drag can put it back. */
+  Mindmap.prototype._cutParent = function (node) {
+    var cut = null;
+    this.edges = this.edges.filter(function (e) {
+      if (e.b !== node.id || cut) return true;
+      cut = e;
+      return false;
+    });
+    return cut;
+  };
+
   Mindmap.prototype.nodesInRect = function (r) {
     var left = Math.min(r.x0, r.x1), right = Math.max(r.x0, r.x1);
     var top = Math.min(r.y0, r.y1), bottom = Math.max(r.y0, r.y1);
@@ -887,22 +1040,28 @@
     var down = dir === 'down';
 
     // each node belongs to the first parent that reaches it; extra links stay links
+    var hid = this._hidden || {};
     var seen = {}, tree = {};
     function build(id) {
       seen[id] = true;
       var own = [];
-      (kids[id] || []).forEach(function (c) {
-        if (!seen[c]) { seen[c] = true; own.push(c); }
-      });
+      // a folded branch is laid out as if it were not there; its nodes keep
+      // whatever coordinates they had, out of sight behind the parent
+      if (!(byId[id] && byId[id].collapsed)) {
+        (kids[id] || []).forEach(function (c) {
+          if (!seen[c] && !hid[c]) { seen[c] = true; own.push(c); }
+        });
+      }
       tree[id] = own;
       own.forEach(build);
     }
     var roots = this.nodes.filter(function (n) { return !hasParent[n.id]; })
       .sort(function (a, b) { return down ? a.x - b.x : a.y - b.y; });
     roots.forEach(function (r) { if (!seen[r.id]) build(r.id); });
-    // anything only reachable round a loop starts a tree of its own
+    // anything only reachable round a loop starts a tree of its own --
+    // except what is folded away, which is not on screen to be placed
     this.nodes.forEach(function (n) {
-      if (!seen[n.id]) { roots.push(n); build(n.id); }
+      if (!seen[n.id] && !hid[n.id]) { roots.push(n); build(n.id); }
     });
     // brothers and sisters keep the order they appear in on screen
     Object.keys(tree).forEach(function (id) {
@@ -977,12 +1136,17 @@
     if (down) {
       var left = first.x - band[first.id] / 2, topY = first.y - first.h / 2;
       roots.forEach(function (r) {
+        if (r.free) {
+          placeDown(r.id, r.x - band[r.id] / 2, r.y - r.h / 2);
+          return;
+        }
         placeDown(r.id, left, topY);
         left += band[r.id] + gx * 3;
       });
     } else if (dir === 'both') {
       var cy = first.y;
       roots.forEach(function (r) {
+        if (r.free) { placeBoth(r.id); return; }
         byId[r.id].y = cy;
         placeBoth(r.id);
         cy += band[r.id] + gy * 4;
@@ -992,6 +1156,12 @@
       var edge = first.x + sign * (-first.w / 2);
       var top = first.y - band[first.id] / 2;
       roots.forEach(function (r) {
+        // a node put somewhere by hand keeps its place; only its own
+        // branch is tidied, around where you left it
+        if (r.free) {
+          placeSide(r.id, r.x - sign * r.w / 2, r.y - band[r.id] / 2, sign);
+          return;
+        }
         placeSide(r.id, edge, top, sign);
         top += band[r.id] + gy * 4;
       });
@@ -1110,6 +1280,14 @@
     if (at === -1) return null;
     var next = key === 'ArrowUp' ? sibs[at - 1] : sibs[at + 1];
     return next || null;
+  };
+
+  Mindmap.prototype.parentOf = function (node) {
+    if (!node) return null;
+    for (var i = 0; i < this.edges.length; i++) {
+      if (this.edges[i].b === node.id) return this.byId(this.edges[i].a);
+    }
+    return null;
   };
 
   Mindmap.prototype.descendantsOf = function (node) {
@@ -1304,10 +1482,19 @@
       return;
     }
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    var hid = this._hidden || {};
+    var shown = 0;
     this.nodes.forEach(function (n) {
+      if (hid[n.id]) return;
+      shown++;
       minX = Math.min(minX, n.x - n.w / 2); maxX = Math.max(maxX, n.x + n.w / 2);
       minY = Math.min(minY, n.y - n.h / 2); maxY = Math.max(maxY, n.y + n.h / 2);
     });
+    if (!shown) {
+      this.cam = { x: r.width / 2, y: r.height / 2, s: 1 };
+      this.draw();
+      return;
+    }
     var pad = 48;
     var s = Math.min((r.width - pad * 2) / (maxX - minX || 1),
                      (r.height - pad * 2) / (maxY - minY || 1));
@@ -1440,9 +1627,80 @@
     };
   };
 
+  /* Which limb each node belongs to: every child of a root takes the next
+     colour, and everything under it inherits. Worked out on demand and kept
+     until the map changes, because it is read once per edge and once per node
+     on every frame. */
+  Mindmap.prototype._branchMap = function () {
+    if (this._branches) return this._branches;
+    var byId = {}, kids = {}, hasParent = {};
+    this.nodes.forEach(function (n) { byId[n.id] = n; });
+    this.edges.forEach(function (e) {
+      if (!byId[e.a] || !byId[e.b]) return;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+      hasParent[e.b] = true;
+    });
+    var of = {}, seen = {}, taken = 0;
+    var paint = function (id, colour) {
+      if (seen[id]) return;
+      seen[id] = true;
+      if (colour) of[id] = colour;
+      (kids[id] || []).forEach(function (c) { paint(c, colour); });
+    };
+    var roots = this.nodes.filter(function (n) { return !hasParent[n.id]; });
+    roots.forEach(function (r) {
+      seen[r.id] = true;
+      (kids[r.id] || []).forEach(function (c) {
+        paint(c, BRANCH_COLORS[taken++ % BRANCH_COLORS.length]);
+      });
+    });
+    this._branches = of;
+    return of;
+  };
+
+  Mindmap.prototype.branchColorOf = function (node) {
+    if (!this.branchColors || !node) return null;
+    return this._branchMap()[node.id] || null;
+  };
+
   // Lay down the path for one edge in the requested style.
   Mindmap.prototype._edgePath = function (ctx, ends, type, seed) {
     ctx.beginPath();
+    if (type === 'elbow') {
+      /* Out of the parent, along, then square into the child -- the shape a
+         family tree is drawn in, and much easier to follow by eye than a
+         bundle of curves when a node has many children. */
+      var a = ends.a, b = ends.b;
+      var r = Math.min(10, Math.abs(b.y - a.y) / 2, Math.abs(b.x - a.x) / 2);
+      ctx.moveTo(a.x, a.y);
+      if (ends.down) {
+        var my = (a.y + b.y) / 2;
+        if (r > 1) {
+          ctx.lineTo(a.x, my - Math.sign(my - a.y) * 0);
+          ctx.lineTo(a.x, my);
+          ctx.arcTo(a.x, my, b.x, my, r);
+          ctx.lineTo(b.x, my);
+          ctx.arcTo(b.x, my, b.x, b.y, r);
+        } else {
+          ctx.lineTo(a.x, my);
+          ctx.lineTo(b.x, my);
+        }
+        ctx.lineTo(b.x, b.y);
+        return;
+      }
+      var mx = a.x + (b.x - a.x) * 0.45;
+      if (r > 1) {
+        ctx.lineTo(mx - Math.sign(b.x - a.x) * r, a.y);
+        ctx.arcTo(mx, a.y, mx, b.y, r);
+        ctx.lineTo(mx, b.y - Math.sign(b.y - a.y) * r);
+        ctx.arcTo(mx, b.y, b.x, b.y, r);
+      } else {
+        ctx.lineTo(mx, a.y);
+        ctx.lineTo(mx, b.y);
+      }
+      ctx.lineTo(b.x, b.y);
+      return;
+    }
     if (type === 'straight' || type === 'dotted') {
       ctx.moveTo(ends.a.x, ends.a.y);
       ctx.lineTo(ends.b.x, ends.b.y);
@@ -1511,13 +1769,16 @@
     }
 
     // edges, border-to-border, in whatever style each one is set to
+    var hid = this._hidden || {};
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
+      if (hid[e.a] || hid[e.b]) continue;      // a folded branch draws nothing
       var ends = this.edgeEnds(e);
       if (!ends) continue;
       var isSel = this.selectedEdge === e;
       var st = this.edgeStyleOf(e);
-      var col = isSel ? t.accent : t.edge;
+      var branch = this.branchColorOf(this.byId(e.b));
+      var col = isSel ? t.accent : (branch || t.edge);
       var lw = isSel ? st.width + 1.4 : st.width;
 
       if (st.type === 'tapered') {
@@ -1594,6 +1855,7 @@
     ctx.textAlign = 'center';
     for (var k = 0; k < this.nodes.length; k++) {
       var n = this.nodes[k];
+      if (hid[n.id]) continue;
       var sel = this.isSelected(n);
       var pending = this.linkFrom && this.linkFrom.id === n.id;
       var paint = this.paintOf(n, t);
@@ -1603,8 +1865,9 @@
       this._shapePath(ctx, n);
       ctx.fillStyle = paint.fill;
       ctx.fill();
-      ctx.strokeStyle = (sel || pending || dropping) ? t.accent : paint.line;
-      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : 1);
+      var limb = (n.color === 'plain' || !n.color) ? this.branchColorOf(n) : null;
+      ctx.strokeStyle = (sel || pending || dropping) ? t.accent : (limb || paint.line);
+      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : (limb ? 1.6 : 1));
       if (dropping) ctx.setLineDash([6, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -1643,6 +1906,47 @@
         ctx.fillText(n.lines[li], n.x, cursorY + li * n._lh + n._lh / 2);
       }
       ctx.restore();               // end the clip for this node
+    }
+
+
+    /* The fold handle: a small circle on the side of every node that has
+       children, minus while the branch is open and plus with a count while it
+       is away. Drawn after the nodes so it is never painted over. */
+    for (var fk = 0; fk < this.nodes.length; fk++) {
+      var fn2 = this.nodes[fk];
+      if (hid[fn2.id]) continue;
+      var fp = this.foldPoint(fn2);
+      if (!fp) continue;
+      var fr = Math.max(6, FOLD_R / this.cam.s);
+      ctx.beginPath();
+      ctx.arc(fp.x, fp.y, fr, 0, Math.PI * 2);
+      ctx.fillStyle = fn2.collapsed ? t.accent : t.node;
+      ctx.fill();
+      ctx.lineWidth = 1.4 / this.cam.s;
+      ctx.strokeStyle = this.branchColorOf(fn2) || t.edge;
+      ctx.stroke();
+
+      var bar = fr * 0.52;
+      ctx.lineWidth = Math.max(1.4, 1.8 / this.cam.s);
+      ctx.strokeStyle = fn2.collapsed ? t.node : t.text;
+      ctx.beginPath();
+      ctx.moveTo(fp.x - bar, fp.y);
+      ctx.lineTo(fp.x + bar, fp.y);
+      if (fn2.collapsed) {
+        ctx.moveTo(fp.x, fp.y - bar);
+        ctx.lineTo(fp.x, fp.y + bar);
+      }
+      ctx.stroke();
+
+      if (fn2.collapsed) {
+        var count = this.hiddenUnder(fn2);
+        if (count) {
+          ctx.font = Math.max(8, 9 / this.cam.s) + 'px ' + this.fontStack;
+          ctx.fillStyle = t.text;
+          ctx.textAlign = 'center';
+          ctx.fillText(String(count), fp.x, fp.y + fr * 2.1);
+        }
+      }
     }
 
     if (this._marquee) {
@@ -1726,6 +2030,16 @@
       var p = self._localPoint(e);
 
       // connector dot first, then the resize grip, then the node itself
+      /* The fold circle first. It is drawn on top of everything, and on a
+         node's edge it can land on the same spot as a connector dot -- so
+         whichever is asked first is the one that gets the tap. */
+      var fold = self.linkMode ? null : self.hitFold(p.x, p.y);
+      if (fold) {
+        self._drag = null;
+        self.toggleCollapse(fold);
+        return;
+      }
+
       var handle = self.linkMode ? null : self.hitHandle(p.x, p.y);
       if (handle) {
         self.select(handle.node);
@@ -1897,20 +2211,40 @@
       } else {
         if (!self._drag.moved &&
             Math.hypot(p.x - self._drag.sx, p.y - self._drag.sy) < DRAG_SLOP) return;
+
+        /* Letting go of a parent takes a deliberate pull. A short drag just
+           moves the node about; only once it has been carried a good way from
+           where it started does the link give. Cutting on the first flicker
+           made nodes fall off their branch by accident, which is worse than
+           having to mean it. */
+        if (!self._drag.cuts) {
+          var from = self.toWorld(self._drag.sx, self._drag.sy);
+          var here = self.toWorld(p.x, p.y);
+          if (Math.hypot(here.x - from.x, here.y - from.y) >= PULL) {
+            var carried = self._drag.movers.map(function (m) { return m.n; });
+            self._drag.cuts = [];
+            carried.forEach(function (nd) {
+              var p2 = self.parentOf(nd);
+              if (p2 && carried.indexOf(p2) !== -1) return;   // moving together
+              var cut = self._cutParent(nd);
+              if (cut) self._drag.cuts.push(cut);
+            });
+            self.draw();
+          }
+        }
+
         var w = self.toWorld(p.x, p.y);
         self._drag.movers.forEach(function (m) {
           m.n.x = w.x + m.dx;
           m.n.y = w.y + m.dy;
         });
         self._drag.moved = true;
-        // the node under the finger becomes the new parent when you let go
+
+        // touching another node is what joins them, so the whole branch is
+        // off limits -- a node cannot be hung underneath itself
         var moving = self._drag.movers.map(function (m) { return m.n; });
-        var over = self.hit(p.x, p.y, moving);
-        if (over && self.descendantsOf(self._drag.node).indexOf(over) === -1) {
-          self._dropOn = over;
-        } else {
-          self._dropOn = null;
-        }
+        var off = moving.concat(self.descendantsOf(self._drag.node));
+        self._dropOn = self.kissing(self._drag.node, off);
         self.draw();
       }
     });
@@ -1987,9 +2321,21 @@
       self._pointers.delete(e.pointerId);
       if (self._pointers.size < 2) self._pinch = null;
       if (self._drag && self._drag.moved && self._dropOn) {
-        self.reparent(self._drag.node, self._dropOn);
+        /* Joined on. It may never have been pulled far enough to come off by
+           itself -- dropping it onto another node says what you meant either
+           way -- so the old link goes now if it is still there. */
+        self._cutParent(self._drag.node);
+        self.edges.push({ a: self._dropOn.id, b: self._drag.node.id });
+        delete self._drag.node.free;         // back in the tree; arrange it
+        self.select(self._drag.node);
         self._dropOn = null;
+        self._changed();
       } else if (self._drag && self._drag.moved) {
+        /* Let go in open space. If it came off its branch on the way it is a
+           node of its own now, and it stays exactly where it was put --
+           tidying it away to the bottom of the map is how it used to get lost
+           the moment it was detached. */
+        if (self._drag.cuts && self._drag.cuts.length) self._drag.node.free = true;
         self._dropOn = null;
         self._changed();
       }

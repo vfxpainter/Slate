@@ -239,6 +239,8 @@
             <button class="ghost-btn" data-act="map-zoom-in">&#43;</button>
             <button class="ghost-btn" data-act="map-fit">Fit</button>
             <button class="ghost-btn" data-act="map-auto" id="autoBtn">Auto-arrange</button>
+            <button class="ghost-btn" data-act="map-find">Find <kbd>Ctrl+F</kbd></button>
+            <button class="ghost-btn" data-act="map-present">Present</button>
             <button class="ghost-btn" data-act="map-style-toggle" id="styleBtn">Style</button>
           </div>
           <div class="map-style">
@@ -271,6 +273,8 @@
             <div class="style-group">
               <span class="style-label">Layout</span>
               <select id="mapLayout" title="Which way the map grows"></select>
+              <button class="chip" data-act="map-branch" id="branchBtn"
+                title="A colour for each branch off the middle">Branch colours</button>
             </div>
             <div class="style-group">
               <span class="style-label">Lines</span>
@@ -288,9 +292,16 @@
             <!-- the everyday buttons, where a thumb can reach them -->
             <div class="map-zoom" id="mapZoom" aria-hidden="true">100%</div>
             <div class="map-quick" id="mapQuick">
-              <button class="quick-btn" data-act="map-child">&#43; Child</button>
-              <button class="quick-btn" data-act="map-sibling">&#43; Sibling</button>
-              <button class="quick-btn" data-act="map-rename">&#9998; Edit</button>
+              <button class="quick-btn" data-act="map-child">Child</button>
+              <button class="quick-btn" data-act="map-sibling">Sibling</button>
+              <button class="quick-btn" data-act="map-rename">Edit</button>
+              <button class="quick-btn" data-act="map-fold">Fold</button>
+              <button class="quick-btn" data-act="map-style-toggle">Colour</button>
+              <button class="quick-btn" data-act="map-image">Picture</button>
+              <button class="quick-btn" data-act="map-image-remove" hidden>Remove picture</button>
+              <button class="quick-btn" data-act="map-link">Link</button>
+              <button class="quick-btn" data-act="map-duplicate">Duplicate</button>
+              <button class="quick-btn danger" data-act="map-del">Delete</button>
             </div>
           </div>
         </div>

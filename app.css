@@ -2735,3 +2735,75 @@ body.dragging-note .note-scroll { touch-action: none; }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* ---------- the strip of node tools under the map ----------
+   More tools than fit across a phone, so it scrolls sideways rather than
+   wrapping into a second row and eating the map. */
+#mapQuick {
+  display: flex;
+  gap: 6px;
+  /* from just past the zoom reading to the far edge, rather than centred
+     over the top of it */
+  left: 4.2rem;
+  right: 8px;
+  transform: none;
+  max-width: none;
+  justify-content: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px;
+}
+@media (min-width: 900px) {
+  /* room enough for every tool: centre them again */
+  #mapQuick { left: 50%; right: auto; transform: translateX(-50%); }
+}
+#mapQuick::-webkit-scrollbar { display: none; }
+#mapQuick .quick-btn { flex: 0 0 auto; }
+#mapQuick .quick-btn.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17130e;
+}
+:root[data-theme="dark"] #mapQuick .quick-btn.on { color: #17130e; }
+#mapQuick .quick-btn:disabled { opacity: .35; }
+#mapQuick .quick-btn.danger svg { stroke: var(--danger); }
+
+/* ---------- presenting ----------
+   Everything except the map gets out of the way. */
+.map-editor.presenting .map-tools,
+.map-editor.presenting .map-style,
+.map-editor.presenting .map-hint,
+.map-editor.presenting .map-quick,
+.map-editor.presenting .map-zoom { display: none; }
+.map-editor.presenting { position: fixed; inset: 0; z-index: 60; background: var(--bg); }
+.map-editor.presenting .map-canvas-wrap { height: 100%; }
+.present-bar {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--pane);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 10px;
+  box-shadow: var(--shadow);
+  z-index: 61;
+}
+.present-btn {
+  font: inherit;
+  font-weight: 600;
+  min-width: 2.4rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.present-btn:hover { background: var(--pane-2); }
+.present-at { color: var(--ink-2); font-size: .88rem; min-width: 3.5rem; text-align: center; }
