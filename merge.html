@@ -399,6 +399,9 @@ pre.report { white-space: pre-wrap; font-size: .82rem; color: var(--ink-2);
       if (kind) row.kind = kind;
       if (f.color) row.color = f.color;
       if (f.pinned) row.pinned = true;
+      // a folder the app invented to match one in another tab; dropping this
+      // would bring every empty folder back as one of yours
+      if (f.auto) row.auto = true;
       self.rows.push(row);
       self.byId[id] = row;
     }

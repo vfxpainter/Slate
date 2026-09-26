@@ -2715,3 +2715,23 @@ body.dragging-note .note-scroll { touch-action: none; }
 @media (max-width: 900px) {
   .toast-act { padding: .2rem .6rem; font-size: .82rem; }
 }
+
+/* The buttons under the map are icons now, so they need to be square and
+   big enough for a thumb rather than as wide as their words used to be. */
+.map-quick .quick-btn {
+  width: 2.75rem;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.map-quick .quick-btn svg {
+  width: 1.35rem;
+  height: 1.35rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

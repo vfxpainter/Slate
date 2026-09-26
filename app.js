@@ -46,7 +46,7 @@
     hits: [],             // where it appears
     hitAt: 0,
     editingWas: '',       // what a node said before you started typing in it
-    tabView: {},          // tab -> tiles | list | outline
+    tabView: {},          // tab -> tiles | list
     folderDeep: false,    // a folder shows its own notes, not its children's
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
@@ -318,10 +318,41 @@
   function isKindTab(t) { return KINDS.indexOf(t) !== -1; }
   // the kind a new thing gets when nothing more specific says otherwise
   function currentKind() { return isKindTab(S.tab) ? S.tab : 'text'; }
-  /* A folder that has not been given a type yet fits every tab. That only
-     happens if sorting was skipped (no restore point could be saved), and
-     showing it everywhere is safer than hiding it anywhere. */
-  function folderFits(f, kind) { return !f.kind || f.kind === kind; }
+  /* Every folder id with a live note filed in it or anywhere below it.
+     Worked out by walking up from each note, which is far cheaper than
+     walking down from each folder, and kept until something changes. */
+  var withContent = null;
+  function clearFolderCache() { withContent = null; }
+  function foldersWithContent() {
+    if (withContent) return withContent;
+    var set = {};
+    liveNotes().forEach(function (n) {
+      var id = n.folderId, guard = 0;
+      while (id && guard++ < 64) {
+        set[id] = true;
+        var f = folderById(id);
+        id = f ? f.parentId : null;
+      }
+    });
+    withContent = set;
+    return set;
+  }
+
+  /* Does this folder belong in this tab?
+
+     A folder with no type yet fits every tab: that only happens if sorting was
+     skipped, and showing it everywhere is safer than hiding it anywhere.
+
+     A folder marked `auto` is one the app made itself, so that a Notes "Work"
+     would have a Mindmaps "Work" to match. It has to earn its place: it shows
+     while it holds a mindmap, here or further in, and stays out of the way
+     when it does not. A folder you made yourself always shows, empty or not --
+     you made it for a reason, probably to fill it in a minute. */
+  function folderFits(f, kind) {
+    if (f.kind && f.kind !== kind) return false;
+    if (!f.auto) return true;
+    return !!foldersWithContent()[f.id];
+  }
   function sameName(a, b) {
     return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   }
@@ -342,10 +373,49 @@
     }
     var nf = DB.blankFolder(f.name, parent);
     nf.kind = kind;
+    // made by the app to match a folder in another tab, not by you
+    nf.auto = true;
     if (f.color) nf.color = f.color;
     S.folders.push(nf);
     if (made) made.push(nf);
+    clearFolderCache();
     return nf.id;
+  }
+
+  /* Folders that were split by type before any of them were marked. One of
+     each name is real and the others were made to match it; the ones holding
+     nothing are the ones that were made. Run once, because after this a
+     folder you make yourself and leave empty must not be mistaken for one of
+     them. */
+  function markLegacyTwins() {
+    try {
+      if (localStorage.getItem('slate-twins-marked')) return [];
+    } catch (e) { /* private mode: do it, just do not remember */ }
+
+    var full = foldersWithContent();
+    var byPlace = {};
+    S.folders.forEach(function (f) {
+      var key = folderChain(f.id).map(function (x) {
+        return String(x.name || '').trim().toLowerCase();
+      }).join('\u0000');
+      (byPlace[key] = byPlace[key] || []).push(f);
+    });
+
+    var marked = [];
+    Object.keys(byPlace).forEach(function (key) {
+      var here = byPlace[key];
+      if (here.length < 2) return;                 // only one of this name: it is real
+      var anyFull = here.some(function (f) { return full[f.id]; });
+      if (!anyFull) return;                        // all empty: leave them all alone
+      here.forEach(function (f) {
+        if (full[f.id] || f.auto) return;
+        f.auto = true;
+        marked.push(f);
+      });
+    });
+
+    try { localStorage.setItem('slate-twins-marked', '1'); } catch (e) { /* private mode */ }
+    return marked;
   }
 
   // Anything out of place: a folder with no type, a folder under a parent of
@@ -634,6 +704,7 @@
     closeBurst();
     var before = refs.map(function (r) { return History.rec(r.store, r.id, current(r.store, r.id)); });
     var result = mutate();
+    clearFolderCache();      // a note may have moved, emptied or filled a folder
     var after = refs.map(function (r) { return History.rec(r.store, r.id, current(r.store, r.id)); });
     History.push(label, before, after);
     return writeAll(refs).then(function () { return result; });
@@ -1171,8 +1242,11 @@
     more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>'
   };
 
-  var TAB_VIEWS = ['tiles', 'list', 'outline'];
-  var TAB_VIEW_NAME = { tiles: 'Tiles', list: 'List', outline: 'Outline' };
+  /* Grid or list, and nothing else. The outline was a whole tree of folders
+     on one screen, which is exactly the thing that made finding anything
+     hard. Folders you go into, shown as tiles or as rows. */
+  var TAB_VIEWS = ['tiles', 'list'];
+  var TAB_VIEW_NAME = { tiles: 'Grid', list: 'List' };
 
   function tabViewMode() {
     var m = S.tabView[S.tab];
@@ -1228,69 +1302,6 @@
     strip.appendChild(add);
     wrap.appendChild(strip);
     return kids.length;
-  }
-
-  /* ---------- the outline ----------
-     Every folder in the tab on one scrolling page, each one openable in place
-     to show what is inside it. Best when you have many folders and want to
-     jump about; the tiles are better when you want to see previews. */
-  function outlineNoteRow(n, depth) {
-    var row = el('button', 'ol-note');
-    row.style.setProperty('--d', String(depth));
-    row.dataset.noteId = n.id;
-    row.appendChild(el('span', 'card-kind k-' + (n.locked ? 'locked' : n.type),
-      n.locked ? '🔒' : (KIND[n.type] || KIND.text)));
-    row.appendChild(markText(el('span', 'ol-title'), displayTitle(n), plainQuery()));
-    row.appendChild(el('span', 'ol-date', fmtDate(n.updatedAt)));
-    var bin = el('span', 'ol-bin', n.deletedAt ? '↺' : '✕');
-    bin.dataset.binNote = n.id;
-    bin.title = n.deletedAt ? 'Restore this note' : 'Move to trash';
-    row.appendChild(bin);
-    return row;
-  }
-
-  function renderOutline(wrap) {
-    var kind = S.tab;
-    var box = el('div', 'outline');
-    var any = false;
-    (function walk(parentId, depth) {
-      childFolders(parentId).filter(function (f) { return folderFits(f, kind); })
-        .sort(function (a, b) {
-          return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || a.name.localeCompare(b.name);
-        })
-        .forEach(function (f) {
-          any = true;
-          var open = !!S.expanded[f.id];
-          var row = el('button', 'ol-row' + (open ? ' open' : ''));
-          row.style.setProperty('--d', String(depth));
-          row.dataset.olFolder = f.id;
-          row.dataset.view = f.id;          // so a dragged note can be dropped on it
-          row.appendChild(el('span', 'ol-tw', '▸'));
-          row.appendChild(el('span', 'ol-name', f.name));
-          row.appendChild(el('span', 'ol-n', '(' + countKindIn(f.id, kind) + ')'));
-          var dots = el('span', 'ol-dots', '⋮');
-          dots.dataset.folderMenu = f.id;
-          dots.title = 'Folder options';
-          row.appendChild(dots);
-          box.appendChild(row);
-          if (open) {
-            walk(f.id, depth + 1);
-            notesDirectlyIn(f.id, kind).forEach(function (n) {
-              box.appendChild(outlineNoteRow(n, depth + 1));
-            });
-          }
-        });
-    })(null, 0);
-
-    notesDirectlyIn(null, kind).forEach(function (n) { box.appendChild(outlineNoteRow(n, 0)); });
-    if (!box.childElementCount) {
-      box.appendChild(el('div', 'list-empty', 'Nothing here yet.'));
-    }
-    var add = el('button', 'ol-add');
-    add.dataset.act = 'new-folder';
-    add.textContent = '＋ New folder';
-    box.appendChild(add);
-    wrap.appendChild(box);
   }
 
   function renderTabBar() {
@@ -1512,12 +1523,6 @@
 
     var mode = tabViewMode();
     $('app').dataset.tabview = mode;
-    if (mode === 'outline' && isKindTab(S.tab) && !S.q) {
-      renderOutline(wrap);
-      wrap.scrollTop = keepScroll;
-      saveTabState();
-      return;
-    }
     var folders = isKindTab(S.tab)
       ? (mode === 'list' ? renderFolderList(wrap) : renderFolderTiles(wrap))
       : 0;
@@ -3581,6 +3586,20 @@ function toggleImgFree() {
     'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>'
   };
 
+  /* The buttons under the map say what they do in a picture. Reading
+     "+ Child" every time you want a child is a tax on doing the obvious, and
+     on a phone the words took the width three buttons needed. */
+  function decorateMapQuick() {
+    Array.prototype.forEach.call(document.querySelectorAll('#mapQuick .quick-btn'), function (b) {
+      var path = MAP_ICONS[b.dataset.act];
+      if (!path || b.querySelector('svg')) return;
+      b.title = b.textContent.trim().replace(/^[\u002b\uff0b\u2212\u270e]\s*/, '');
+      b.setAttribute('aria-label', b.title);
+      b.textContent = '';
+      b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + '</svg>';
+    });
+  }
+
   function decorateMapTools() {
     Array.prototype.forEach.call(document.querySelectorAll('.map-tools .ghost-btn'), function (b) {
       var path = MAP_ICONS[b.dataset.act];
@@ -3605,6 +3624,11 @@ function toggleImgFree() {
   /* The menu for one node: the right button on a desktop, a long press on a
      phone. It opens where you pressed, and closes as soon as you pick
      something or tap elsewhere. */
+  function hideNodeMenu() {
+    var m = $('nodeMenu');
+    if (m && !m.hidden) m.hidden = true;
+  }
+
   function showNodeMenu(x, y) {
     var m = $('nodeMenu');
     if (!m) return;
@@ -3615,14 +3639,23 @@ function toggleImgFree() {
     var maxY = window.innerHeight - r.height - 8;
     m.style.left = Math.max(8, Math.min(x, maxX)) + 'px';
     m.style.top = Math.max(8, Math.min(y, maxY)) + 'px';
-    if (!m.dataset.wired) {
-      m.dataset.wired = '1';
-      m.addEventListener('click', function () { m.hidden = true; });
-    }
+  }
+
+  /* Every way out of the node menu, set up once at startup. */
+  function wireNodeMenu() {
+    var m = $('nodeMenu');
+    if (!m) return;
+    m.addEventListener('click', function () { m.hidden = true; });
+    // a tap on the map, the window moving, the app going away: all mean "not that"
+    var wrap = document.querySelector('.map-canvas-wrap');
+    if (wrap) wrap.addEventListener('pointerdown', hideNodeMenu, true);
+    window.addEventListener('resize', hideNodeMenu);
+    window.addEventListener('blur', hideNodeMenu);
   }
 
   function mountMap() {
     var canvas = $('mapCanvas');
+    wireNodeMenu.once = wireNodeMenu.once || (wireNodeMenu(), true);
     if (!S.map) {
       S.map = new Mindmap(canvas, {
         onChange: function () {
@@ -3696,6 +3729,7 @@ function toggleImgFree() {
     renderShapeSwatches();
     renderEdgeTypes();
     renderLayouts();
+    decorateMapQuick();
     var cc = $('customColor');
     if (cc && !cc.dataset.wired) {
       cc.dataset.wired = '1';
@@ -6239,6 +6273,11 @@ function toggleImgFree() {
   function closeMenus() {
     $('newMenu').hidden = true;
     $('noteMenu').hidden = true;
+    /* The menu for a single mindmap node. Leaving it out of here is why it
+       stayed on screen however much you tapped: every other way of dismissing
+       a menu goes through this function. */
+    var nm = $('nodeMenu');
+    if (nm) nm.hidden = true;
   }
   function toggleMenu(m, e) {
     if (e) e.stopPropagation();
@@ -7008,6 +7047,12 @@ function toggleImgFree() {
       .then(purgeOldTrash)
       .then(sweepBlankNotes)
       .then(function () { return sortFoldersByType(false); })
+      .then(function () {
+        // folders split by type before the mark existed: work out which of
+        // them the app made, so the empty ones stop filling up every tab
+        var marked = markLegacyTwins();
+        return marked.length ? DB.putMany('folders', marked) : null;
+      })
       .then(function () {
         // reopen the tab, and the folder in it, you were last in
         if (S.layout === 'tabs') {

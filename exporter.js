@@ -842,10 +842,13 @@
             id: f.id, name: f.name, parentId: finalParentId,
             order: f.order || Date.now(), createdAt: f.createdAt || Date.now()
           };
-          // carried across so a restored folder keeps its type, colour and pin
+          // carried across so a restored folder keeps its type, colour and
+          // pin -- and whether the app made it, or every folder the app ever
+          // invented would come back as one of yours on the next import
           if (f.kind) row.kind = f.kind;
           if (f.color) row.color = f.color;
           if (f.pinned) row.pinned = true;
+          if (f.auto) row.auto = true;
           toInsert.push(row);
         }
       });
@@ -857,6 +860,7 @@
             order: f.order || Date.now(), createdAt: f.createdAt || Date.now() };
           if (f.kind) r.kind = f.kind;
           if (f.color) r.color = f.color;
+          if (f.auto) r.auto = true;
           toInsert.push(r);
         });
         next = [];

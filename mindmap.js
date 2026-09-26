@@ -1757,10 +1757,12 @@
         clearTimeout(self._pressTimer);
         self._pressTimer = setTimeout(function () {
           self._pressTimer = null;
+          // already carrying it somewhere: that is not a long press
+          if (self._drag && self._drag.moved) return;
           self._drag = null;
           self.select(n);
           self.opts.onNodeMenu(n, e.clientX, e.clientY);
-        }, 500);
+        }, 620);
       }
 
       if (self.linkMode) {
@@ -1881,9 +1883,8 @@
         self.draw();
         return;
       }
-      if (self._pressTimer &&
-          Math.hypot(lp0.x - (self._drag ? self._drag.sx : lp0.x),
-                     lp0.y - (self._drag ? self._drag.sy : lp0.y)) > 10) {
+      if (self._pressTimer && self._drag &&
+          Math.hypot(lp0.x - self._drag.sx, lp0.y - self._drag.sy) > 6) {
         clearTimeout(self._pressTimer);
         self._pressTimer = null;
       }
