@@ -33,7 +33,8 @@
   var DRAG_SLOP = 4;         // px before a press becomes a drag
   var KISS = 14;             // world px the two boxes must overlap by to join
   var REACH = 95;            // and how far the beam will stretch to find one
-  var PULL = 70;             // how much further from its parent before it lets go
+  var PULL = 140;            // how much further from its parent before it lets go
+  var PULL_SHARE = 0.8;      // or that much of the gap it already sat at
   var HAND_PULL = 2.2;       // and how much more of that when you arrange by hand
 
   /* Node colours. Each entry carries a light and a dark fill so a map looks
@@ -184,6 +185,7 @@
   };
 
   Mindmap.prototype.isDark = function () {
+    if (this._exportTheme) return !!this._exportDark;
     var t = document.documentElement.dataset.theme;
     if (t === 'dark') return true;
     if (t === 'light') return false;
@@ -191,6 +193,7 @@
   };
 
   Mindmap.prototype.theme = function () {
+    if (this._exportTheme) return this._exportTheme;   // paper, not the screen
     var cs = getComputedStyle(document.documentElement);
     function v(name, fb) { return (cs.getPropertyValue(name) || '').trim() || fb; }
     return {
@@ -250,6 +253,7 @@
       if (e.w) out.w = e.w;
       /* A relationship, not a branch: it says two things are connected
          without either being under the other, and carries its own words. */
+      if (e.color) out.color = e.color;
       if (e.rel) {
         out.rel = true;
         out.label = e.label || '';
@@ -308,6 +312,7 @@
         var o = { a: e.a, b: e.b };
         if (e.t) o.t = e.t;
         if (e.w) o.w = e.w;
+        if (e.color) o.color = e.color;
         if (e.rel) {
           o.rel = true;
           if (e.label) o.label = e.label;
@@ -1075,7 +1080,6 @@
   };
 
   var KNOB_R = 7;        // the dot you drag to bend a relationship
-  var HANDLE_R = 6;      // world-space radius of a connector dot
   var GRIP = 9;          // resize grip square
   var FOLD_R = 9;        // the circle that folds a branch away
   var PIC_GRIP_R = 7;    // the corner you drag to resize a picture
@@ -1161,38 +1165,16 @@
     };
   };
 
-  // Connector dots sit at the middle of each side.
-  Mindmap.prototype.handlePoints = function (n) {
-    return [
-      { side: 'l', x: n.x - n.w / 2, y: n.y },
-      { side: 'r', x: n.x + n.w / 2, y: n.y },
-      { side: 't', x: n.x, y: n.y - n.h / 2 },
-      { side: 'b', x: n.x, y: n.y + n.h / 2 }
-    ];
-  };
-
   // Which node currently shows its handles: the hovered one, else the selected.
   Mindmap.prototype.handleNode = function () {
     if (this.selection.length > 1) return null;   // ambiguous with many selected
     return this._hover || this.selected || null;
   };
 
-  // Hit tests for the handles work in screen pixels. In world units the
-  // tolerance grows as you zoom out, and a short node's corner grip starts
-  // swallowing its side connector.
+  // Hit tests work in screen pixels: in world units the tolerance grows as
+  // you zoom out, and the grips start swallowing each other.
   Mindmap.prototype._toScreen = function (wx, wy) {
     return { x: wx * this.cam.s + this.cam.x, y: wy * this.cam.s + this.cam.y };
-  };
-
-  Mindmap.prototype.hitHandle = function (px, py) {
-    var n = this.handleNode();
-    if (!n) return null;
-    var pts = this.handlePoints(n);
-    for (var i = 0; i < pts.length; i++) {
-      var sp = this._toScreen(pts[i].x, pts[i].y);
-      if (Math.hypot(sp.x - px, sp.y - py) <= 11) return { node: n, side: pts[i].side };
-    }
-    return null;
   };
 
   /* Where the fold handle sits: on the edge of the node facing its
@@ -1372,8 +1354,6 @@
   Mindmap.prototype.hitGrip = function (px, py) {
     var n = this.handleNode();
     if (!n) return null;
-    // connectors win any overlap, so a link drag is never read as a resize
-    if (this.hitHandle(px, py)) return null;
     var g = this._toScreen(n.x + n.w / 2, n.y + n.h / 2);
     return (Math.abs(g.x - px) <= 10 && Math.abs(g.y - py) <= 10) ? n : null;
   };
@@ -1608,6 +1588,7 @@
     clip.edges.forEach(function (e) {
       if (made[e.a] && made[e.b]) {
         var cp = { a: made[e.a].id, b: made[e.b].id, type: e.type, width: e.width };
+        if (e.color) cp.color = e.color;
         if (e.rel) {
           cp.rel = true;
           cp.label = e.label || '';
@@ -2460,6 +2441,12 @@
     };
   }
 
+  // the width of a run of text in this map's font, for sizing a label box
+  Mindmap.prototype.measureText = function (text, size) {
+    this.ctx.font = (size || this.fontSize) + 'px ' + this.fontStack;
+    return this.ctx.measureText(String(text || '')).width;
+  };
+
   Mindmap.prototype.edgeStyleOf = function (e) {
     return {
       type: e.t || this.style.type,
@@ -2498,64 +2485,100 @@
     return of;
   };
 
+  /* What colour a link is drawn in. The canvas and the SVG the exports are
+     drawn from both ask this, so a line cannot come out one colour on screen
+     and another on paper. A colour set on the link itself wins; after that a
+     relationship is quiet grey and a branch takes its branch colour. */
+  /* How a node's outline is drawn: its own colour if it has one, otherwise
+     its branch's. Asked by the canvas and by the SVG the exports are drawn
+     from, so a box cannot be outlined one way on screen and another on paper. */
+  Mindmap.prototype.nodeLineOf = function (node, t) {
+    var paint = this.paintOf(node, t);
+    var limb = (node.color === 'plain' || !node.color) ? this.branchColorOf(node) : null;
+    return { fill: paint.fill, line: limb || paint.line, width: limb ? 1.6 : 1 };
+  };
+
+  Mindmap.prototype.edgeColorOf = function (e, t) {
+    if (e && e.color) {
+      if (isHex(e.color)) return e.color;
+      var p = PALETTE[e.color];
+      if (p && p.line) return p.line;
+    }
+    if (e && e.rel) return t.ink3 || t.edge;
+    return this.branchColorOf(this.byId(e.b)) || t.edge;
+  };
+
+  /* Give the chosen link a colour, or take it away again. Nodes have had this
+     for ever; a relationship saying something different from the branch it
+     crosses is exactly the case for it. */
+  Mindmap.prototype.setEdgeColor = function (key) {
+    var e = this.selectedEdge;
+    if (!e) return false;
+    if (!key || key === 'plain') delete e.color;
+    else if (PALETTE[key] || isHex(key)) e.color = key;
+    else return false;
+    this._changed();
+    return true;
+  };
+
   Mindmap.prototype.branchColorOf = function (node) {
     if (!this.branchColors || !node) return null;
     return this._branchMap()[node.id] || null;
   };
 
   // Lay down the path for one edge in the requested style.
-  Mindmap.prototype._edgePath = function (ctx, ends, type, seed) {
-    ctx.beginPath();
+  /* An edge's shape, written once, as an SVG path. The canvas draws it
+     through Path2D and the exports print the same string, so a line cannot
+     come out one shape on screen and another on paper. */
+  Mindmap.prototype.edgePathD = function (ends, type, seed) {
+    function pt(p) { return p.x + ' ' + p.y; }
     if (type === 'elbow') {
       /* Out of the parent, along, then square into the child -- the shape a
          family tree is drawn in, and much easier to follow by eye than a
          bundle of curves when a node has many children. */
       var a = ends.a, b = ends.b;
       var r = Math.min(10, Math.abs(b.y - a.y) / 2, Math.abs(b.x - a.x) / 2);
-      ctx.moveTo(a.x, a.y);
+      var d = 'M' + pt(a);
       if (ends.down) {
         var my = (a.y + b.y) / 2;
         if (r > 1) {
-          ctx.lineTo(a.x, my - Math.sign(my - a.y) * 0);
-          ctx.lineTo(a.x, my);
-          ctx.arcTo(a.x, my, b.x, my, r);
-          ctx.lineTo(b.x, my);
-          ctx.arcTo(b.x, my, b.x, b.y, r);
+          var sx = Math.sign(b.x - a.x) || 1;
+          d += ' L' + a.x + ' ' + (my - Math.sign(my - a.y) * r) +
+               ' Q' + a.x + ' ' + my + ' ' + (a.x + sx * r) + ' ' + my +
+               ' L' + (b.x - sx * r) + ' ' + my +
+               ' Q' + b.x + ' ' + my + ' ' + b.x + ' ' + (my + Math.sign(b.y - my) * r);
         } else {
-          ctx.lineTo(a.x, my);
-          ctx.lineTo(b.x, my);
+          d += ' L' + a.x + ' ' + my + ' L' + b.x + ' ' + my;
         }
-        ctx.lineTo(b.x, b.y);
-        return;
+        return d + ' L' + pt(b);
       }
       var mx = a.x + (b.x - a.x) * 0.45;
       if (r > 1) {
-        ctx.lineTo(mx - Math.sign(b.x - a.x) * r, a.y);
-        ctx.arcTo(mx, a.y, mx, b.y, r);
-        ctx.lineTo(mx, b.y - Math.sign(b.y - a.y) * r);
-        ctx.arcTo(mx, b.y, b.x, b.y, r);
+        var sgx = Math.sign(b.x - a.x) || 1;
+        var sgy = Math.sign(b.y - a.y) || 1;
+        d += ' L' + (mx - sgx * r) + ' ' + a.y +
+             ' Q' + mx + ' ' + a.y + ' ' + mx + ' ' + (a.y + sgy * r) +
+             ' L' + mx + ' ' + (b.y - sgy * r) +
+             ' Q' + mx + ' ' + b.y + ' ' + (mx + sgx * r) + ' ' + b.y;
       } else {
-        ctx.lineTo(mx, a.y);
-        ctx.lineTo(mx, b.y);
+        d += ' L' + mx + ' ' + a.y + ' L' + mx + ' ' + b.y;
       }
-      ctx.lineTo(b.x, b.y);
-      return;
+      return d + ' L' + pt(b);
     }
     if (type === 'straight' || type === 'dotted') {
-      ctx.moveTo(ends.a.x, ends.a.y);
-      ctx.lineTo(ends.b.x, ends.b.y);
-      return;
+      return 'M' + pt(ends.a) + ' L' + pt(ends.b);
     }
     if (type === 'sketch') {
       // A pen wavers, it does not zigzag: one smooth curve whose two control
       // points are nudged off the straight line by a small fixed amount.
-      var pts = sketchControls(ends, seed);
-      ctx.moveTo(ends.a.x, ends.a.y);
-      ctx.bezierCurveTo(pts.c1.x, pts.c1.y, pts.c2.x, pts.c2.y, ends.b.x, ends.b.y);
-      return;
+      var sp = sketchControls(ends, seed);
+      return 'M' + pt(ends.a) + ' C' + pt(sp.c1) + ' ' + pt(sp.c2) + ' ' + pt(ends.b);
     }
-    ctx.moveTo(ends.a.x, ends.a.y);
-    ctx.bezierCurveTo(ends.c1.x, ends.c1.y, ends.c2.x, ends.c2.y, ends.b.x, ends.b.y);
+    return 'M' + pt(ends.a) + ' C' + pt(ends.c1) + ' ' + pt(ends.c2) + ' ' + pt(ends.b);
+  };
+
+  Mindmap.prototype._edgePath = function (ctx, ends, type, seed) {
+    return new Path2D(this.edgePathD(ends, type, seed));
   };
 
   Mindmap.prototype._paint = function () {
@@ -2617,9 +2640,8 @@
       if (!ends) continue;
       var isSel = this.selectedEdge === e;
       var st = this.edgeStyleOf(e);
-      var branch = e.rel ? null : this.branchColorOf(this.byId(e.b));
-      var col = isSel ? t.accent : (branch || t.edge);
-      if (e.rel && !isSel) col = t.ink3 || t.edge;
+      var col = e.color ? this.edgeColorOf(e, t)
+                        : (isSel ? t.accent : this.edgeColorOf(e, t));
       var lw = isSel ? st.width + 1.4 : st.width;
 
       if (st.type === 'tapered') {
@@ -2646,8 +2668,7 @@
 
       var seed = seedOf(e);
       if (e.rel) ctx.setLineDash([7, 6]);
-      this._edgePath(ctx, ends, e.rel ? 'curve' : st.type, seed);
-      ctx.stroke();
+      ctx.stroke(this._edgePath(ctx, ends, e.rel ? 'curve' : st.type, seed));
       if (e.rel) ctx.setLineDash([]);
       if (st.type === 'sketch') {       // a second, fainter stroke reads as ink
         var p2 = sketchControls(ends, seed, 1);
@@ -2731,9 +2752,9 @@
       this._shapePath(ctx, n);
       ctx.fillStyle = paint.fill;
       ctx.fill();
-      var limb = (n.color === 'plain' || !n.color) ? this.branchColorOf(n) : null;
-      ctx.strokeStyle = (sel || pending || dropping) ? t.accent : (limb || paint.line);
-      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : (limb ? 1.6 : 1));
+      var skin = this.nodeLineOf(n, t);
+      ctx.strokeStyle = (sel || pending || dropping) ? t.accent : skin.line;
+      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : skin.width);
       if (dropping) ctx.setLineDash([6, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -3116,20 +3137,13 @@
       ctx.setLineDash([]);
     }
 
-    // connectors + resize grip on the hovered / selected node
+    /* The resize grip on the hovered / selected node. The four dots that used
+       to sit on its sides are gone: they were on screen the whole time you
+       were working, and the drag they started made a link out of what was
+       usually just a slip. The link tool in the strip does the same job when
+       it is actually wanted. */
     var hn = this.handleNode();
     if (hn && !this.linkMode) {
-      var r = Math.max(3.5, HANDLE_R / this.cam.s);
-      this.handlePoints(hn).forEach(function (pt) {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = t.accent;
-        ctx.fill();
-        ctx.lineWidth = 1.5 / this.cam.s;
-        ctx.strokeStyle = t.node;
-        ctx.stroke();
-      }, this);
-
       var g = Math.max(5, GRIP / this.cam.s);
       var gx = hn.x + hn.w / 2, gy = hn.y + hn.h / 2;
       ctx.beginPath();
@@ -3254,15 +3268,6 @@
         self._picDown.wy = pw.y;
       }
 
-      var handle = self.linkMode ? null : self.hitHandle(p.x, p.y);
-      if (handle) {
-        self.select(handle.node);
-        self._linking = { from: handle.node };
-        self._cursor = self.toWorld(p.x, p.y);
-        self._drag = null;
-        self.draw();
-        return;
-      }
       var grip = self.linkMode ? null : self.hitGrip(p.x, p.y);
       if (grip) {
         self.select(grip);
@@ -3508,6 +3513,11 @@
            A map you arrange by hand asks for a much longer pull, because
            moving nodes about is the whole business there. */
         if (!self._drag.cuts) {
+          /* How far is far enough. A flat number is wrong on its own: the
+             same 70px that felt deliberate on a tight map was a nudge on a
+             wide one, and nodes kept falling off their branch by accident.
+             It is a flat pull OR most of the gap the node already sat at,
+             whichever is the greater, so the map's own scale decides. */
           var reach = PULL * (self.auto ? 1 : HAND_PULL);
           var carried = self._drag.movers.map(function (m) { return m.n; });
           var loose = [];
@@ -3516,7 +3526,8 @@
             if (!par || carried.indexOf(par) !== -1) return;   // moving together
             var was = self._drag.gaps[nd.id];
             var now = Math.hypot(nd.x - par.x, nd.y - par.y);
-            if (was === undefined || now < was + reach) return;
+            if (was === undefined) return;
+            if (now < was + Math.max(reach, was * PULL_SHARE)) return;
             loose.push(nd);
           });
           if (loose.length) {
@@ -3814,173 +3825,231 @@
 
   /* ---------- SVG output for PDF / HTML export ---------- */
 
+  /* ---------- the picture the exports are drawn from ----------
+
+     This was a renderer of its own once, working out its own sizes and its own
+     colours, and it fell behind the map it was supposed to be a picture of: it
+     knew about one picture per node when a node could hold six, it drew every
+     line in a single colour whatever the branch said, and it drew a
+     relationship as an ordinary branch with neither dashes nor words.
+
+     So it works nothing out any more. It builds a real map off screen, hands
+     it the same font, the same theme and the proportions of the pictures, and
+     reads back the positions that map settles on -- the same ones on screen.
+     Only the painting is different: shapes instead of canvas calls. What the
+     map grows, the export gets, without anyone having to remember to add it
+     here as well. */
   Mindmap.toSVG = function (map, opts) {
     opts = opts || {};
-    var images = opts.images || {};       // imageId -> { url (data URI), w, h }
+    if (!map || !map.nodes || !map.nodes.length) return '';
+    var images = opts.images || {};      // imageId -> { url (data URI), w, h }
     var dark = !!opts.dark;
-    var size = opts.fontSize || DEF_SIZE;
-    var stack = opts.fontStack || DEF_STACK;
-    var lineH = lineHeightFor(size);
-    var maxW = wrapWidthFor(size);
-    var probe = document.createElement('canvas').getContext('2d');
-    probe.font = size + 'px ' + stack;
 
-    function wrap(text, width) {
-      var words = String(text || '').split(/\s+/).filter(Boolean);
-      if (!words.length) return [];
-      var lines = [], line = '';
-      for (var i = 0; i < words.length; i++) {
-        var pr = line ? line + ' ' + words[i] : words[i];
-        if (probe.measureText(pr).width > width && line) { lines.push(line); line = words[i]; }
-        else { line = pr; }
-      }
-      lines.push(line);
-      return lines;
-    }
-
-    var nodes = (map && map.nodes ? map.nodes : []).map(function (n) {
-      var fs = n.fs || size;
-      var lh = lineHeightFor(fs);
-      var shape = SHAPES[n.shape] ? n.shape : 'round';
-      var sh = SHAPES[shape];
-      probe.font = fs + 'px ' + stack;
-      var lines = wrap(n.text, n.w0 ? Math.max(40, n.w0 / sh.padX - PAD_X * 2) : wrapWidthFor(fs));
-      var textW = 0;
-      lines.forEach(function (l) { textW = Math.max(textW, probe.measureText(l).width); });
-      var imgW = 0, imgH = 0, rec = n.image ? images[n.image] : null;
-      if (rec && rec.w && rec.h) {
-        var scale = Math.min(IMG_MAX_W / rec.w, IMG_MAX_H / rec.h, 1);
-        imgW = Math.round(rec.w * scale);
-        imgH = Math.round(rec.h * scale);
-      }
-      var cw = Math.max(70, Math.min(wrapWidthFor(fs), textW), imgW) + PAD_X * 2;
-      var ch = PAD_Y * 2 + lines.length * lh + (imgH ? imgH + (lines.length ? IMG_GAP : 0) : 0);
-      var w = n.w0 || Math.round(cw * sh.padX);
-      var h = n.h0 || Math.round(ch * sh.padY);
-      if (sh.equal) {
-        var side = Math.max(w, h);
-        if (!n.w0) w = side;
-        if (!n.h0) h = side;
-      }
-      return {
-        id: n.id, x: n.x || 0, y: n.y || 0, lines: lines, color: n.color,
-        shape: shape, fs: fs, lh: lh,
-        img: rec || null, imgW: imgW, imgH: imgH, w: w, h: h
-      };
+    var mm = new Mindmap(document.createElement('canvas'), {});
+    mm._exportDark = dark;
+    mm._exportTheme = {
+      node: opts.node || '#f2f0ec',
+      accent: opts.accent || '#c8a27a',
+      text: opts.text || '#1a1a1a',
+      edge: opts.edge || '#8b8f9a',
+      grid: opts.background || '#ffffff',
+      danger: '#e0705f',
+      border: opts.border || '#c9c6bf',
+      ink3: opts.edge || '#8b8f9a'
+    };
+    // the pictures are not loaded here, but their proportions decide the layout
+    Object.keys(images).forEach(function (id) {
+      var rec = images[id];
+      if (rec && rec.w && rec.h) mm._ratio[id] = rec.w / rec.h;
     });
-    if (!nodes.length) return '';
+    mm.setFont(opts.fontStack || DEF_STACK, opts.fontSize || DEF_SIZE);
+    mm.setData(map);
+    mm.auto = false;         // the saved positions are the look; never re-tidy
+    mm._layout();
+
+    var t = mm._exportTheme;
+    var hid = mm._hidden || {};
+    var live = mm.nodes.filter(function (n) { return !hid[n.id]; });
+    if (!live.length) return '';
 
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    nodes.forEach(function (n) {
+    live.forEach(function (n) {
       minX = Math.min(minX, n.x - n.w / 2); maxX = Math.max(maxX, n.x + n.w / 2);
       minY = Math.min(minY, n.y - n.h / 2); maxY = Math.max(maxY, n.y + n.h / 2);
     });
-    var pad = 24;
+    var pad = 30;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
     var W = maxX - minX, H = maxY - minY;
-    var idx = {};
-    nodes.forEach(function (n) { idx[n.id] = n; });
 
-    var stroke = opts.edge || '#8b8f9a';
-    var baseFill = opts.node || '#f2f0ec';
-    var baseLine = opts.border || '#c9c6bf';
-    var text = opts.text || '#1a1a1a';
-
-    function esc(s) {
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    function esc(v) {
+      return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
+    function attr(v) { return esc(v).replace(/"/g, '&quot;'); }
+    function r2(v) { return Math.round(v * 100) / 100; }
 
-    var parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="' +
-      minX + ' ' + minY + ' ' + W + ' ' + H + '" width="' + Math.round(W) +
-      '" height="' + Math.round(H) + '" font-family="' + stack.replace(/"/g, "'") + '">'];
+    var stack = opts.fontStack || DEF_STACK;
+    var parts = ['<svg xmlns="http://www.w3.org/2000/svg" ' +
+      'xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="' +
+      r2(minX) + ' ' + r2(minY) + ' ' + r2(W) + ' ' + r2(H) + '" width="' +
+      Math.round(W) + '" height="' + Math.round(H) +
+      '" font-family="' + attr(stack) + '">'];
 
     if (opts.background) {
-      parts.push('<rect x="' + minX + '" y="' + minY + '" width="' + W + '" height="' + H +
-        '" fill="' + opts.background + '"/>');
+      parts.push('<rect x="' + r2(minX) + '" y="' + r2(minY) + '" width="' + r2(W) +
+        '" height="' + r2(H) + '" fill="' + attr(opts.background) + '"/>');
     }
 
-    var mapStyle = (map && map.style) || {};
-    var defType = EDGE_TYPES[mapStyle.type] ? mapStyle.type : DEF_EDGE.type;
-    var defWidth = mapStyle.width || DEF_EDGE.width;
-
-    (map.edges || []).forEach(function (e) {
-      var a = idx[e.a], b = idx[e.b];
-      if (!a || !b) return;
-      var pa = borderPoint(a, b), pb = borderPoint(b, a);
-      var type = EDGE_TYPES[e.t] ? e.t : defType;
-      var lw = e.w || defWidth;
-      var mx = (pa.x + pb.x) / 2;
+    /* ---- the lines ---- */
+    var labels = [];
+    mm.edges.forEach(function (e) {
+      if (hid[e.a] || hid[e.b]) return;            // a folded branch draws nothing
+      var ends = mm.edgeEnds(e);
+      if (!ends) return;
+      var st = mm.edgeStyleOf(e);
+      var col = mm.edgeColorOf(e, t);
+      var lw = st.width;
+      var type = e.rel ? 'curve' : st.type;
 
       if (type === 'tapered') {
-        var dxT = pb.x - pa.x, dyT = pb.y - pa.y;
+        // a filled sliver, thick where it leaves the parent and a point at the child
+        var dxT = ends.b.x - ends.a.x, dyT = ends.b.y - ends.a.y;
         var lenT = Math.hypot(dxT, dyT) || 1;
         var half = Math.max(1.2, lw * 1.9);
         var nxT = -dyT / lenT * half, nyT = dxT / lenT * half;
-        var mxT = (pa.x + pb.x) / 2, myT = (pa.y + pb.y) / 2;
-        parts.push('<path d="M' + (pa.x + nxT) + ' ' + (pa.y + nyT) +
-          ' Q' + (mxT + nxT * 0.6) + ' ' + (myT + nyT * 0.6) + ' ' + pb.x + ' ' + pb.y +
-          ' Q' + (mxT - nxT * 0.6) + ' ' + (myT - nyT * 0.6) + ' ' +
-          (pa.x - nxT) + ' ' + (pa.y - nyT) + ' Z" fill="' + stroke + '"/>');
-        return;
+        var mxT = (ends.a.x + ends.b.x) / 2, myT = (ends.a.y + ends.b.y) / 2;
+        parts.push('<path d="M' + r2(ends.a.x + nxT) + ' ' + r2(ends.a.y + nyT) +
+          ' Q' + r2(mxT + nxT * 0.6) + ' ' + r2(myT + nyT * 0.6) + ' ' +
+          r2(ends.b.x) + ' ' + r2(ends.b.y) +
+          ' Q' + r2(mxT - nxT * 0.6) + ' ' + r2(myT - nyT * 0.6) + ' ' +
+          r2(ends.a.x - nxT) + ' ' + r2(ends.a.y - nyT) + ' Z" fill="' + col + '"/>');
+        return;                        // the taper is its own arrow head
       }
 
-      var d;
-      if (type === 'straight' || type === 'dotted') {
-        d = 'M' + pa.x + ' ' + pa.y + ' L' + pb.x + ' ' + pb.y;
-      } else if (type === 'sketch') {
-        var sc = sketchControls({ a: pa, b: pb }, seedOf(e));
-        d = 'M' + pa.x + ' ' + pa.y + ' C' + sc.c1.x + ' ' + sc.c1.y + ' ' +
-            sc.c2.x + ' ' + sc.c2.y + ' ' + pb.x + ' ' + pb.y;
-      } else {
-        d = 'M' + pa.x + ' ' + pa.y + ' C' + mx + ' ' + pa.y + ' ' + mx +
-            ' ' + pb.y + ' ' + pb.x + ' ' + pb.y;
+      var seed = seedOf(e);
+      var dash = e.rel ? ' stroke-dasharray="7,6"'
+               : (type === 'dotted'
+                   ? ' stroke-dasharray="' + r2(lw * 0.6) + ',' + r2(lw * 2.6) + '"' : '');
+      parts.push('<path d="' + mm.edgePathD(ends, type, seed) + '" fill="none" stroke="' +
+        col + '" stroke-width="' + lw + '" stroke-linecap="round"' + dash + '/>');
+
+      if (type === 'sketch') {         // a second, fainter stroke reads as ink
+        var p2 = sketchControls(ends, seed, 1);
+        parts.push('<path d="M' + r2(ends.a.x) + ' ' + r2(ends.a.y) + ' C' +
+          r2(p2.c1.x) + ' ' + r2(p2.c1.y) + ' ' + r2(p2.c2.x) + ' ' + r2(p2.c2.y) + ' ' +
+          r2(ends.b.x) + ' ' + r2(ends.b.y) + '" fill="none" stroke="' + col +
+          '" stroke-width="' + lw + '" stroke-linecap="round" opacity="0.5"/>');
       }
-      parts.push('<path d="' + d + '" fill="none" stroke="' + stroke +
-        '" stroke-width="' + lw + '" stroke-linecap="round"' +
-        (type === 'dotted' ? ' stroke-dasharray="' + (lw * 0.6) + ',' + (lw * 2.6) + '"' : '') +
-        '/>');
+
+      if (e.rel) {
+        /* Its words, in a box on the middle of the arc. Drawn after every
+           line, so a neighbouring branch never crosses over the top of it. */
+        var mid = bezierAt(0.5, ends.a, ends.c1, ends.c2, ends.b);
+        var words = (e.label || '').trim() || 'relates to';
+        var fs = Math.max(10, Math.round(mm.fontSize * 0.82));
+        var bh = Math.max(16, mm.fontSize * 1.35);
+        var bw = mm.measureText(words, fs) + 14;
+        labels.push('<g><rect x="' + r2(mid.x - bw / 2) + '" y="' + r2(mid.y - bh / 2) +
+          '" width="' + r2(bw) + '" height="' + r2(bh) + '" rx="5" fill="' + t.node +
+          '" stroke="' + col + '" stroke-width="1.2"/>' +
+          '<text x="' + r2(mid.x) + '" y="' + r2(mid.y) + '" fill="' + t.text +
+          '" font-size="' + fs + '" text-anchor="middle" dominant-baseline="central">' +
+          esc(words) + '</text></g>');
+        return;                        // a relationship points at neither end
+      }
+
+      // arrow head, pointing along the last bit of whatever path was drawn
+      var tip, pre;
+      if (type === 'curve') {
+        tip = bezierAt(1, ends.a, ends.c1, ends.c2, ends.b);
+        pre = bezierAt(0.92, ends.a, ends.c1, ends.c2, ends.b);
+      } else {
+        tip = ends.b;
+        pre = { x: ends.a.x + (ends.b.x - ends.a.x) * 0.92,
+                y: ends.a.y + (ends.b.y - ends.a.y) * 0.92 };
+      }
+      var ang = Math.atan2(tip.y - pre.y, tip.x - pre.x);
+      var head = Math.max(7, lw * 4);
+      parts.push('<path d="M' + r2(tip.x) + ' ' + r2(tip.y) +
+        ' L' + r2(tip.x - head * Math.cos(ang - 0.4)) + ' ' + r2(tip.y - head * Math.sin(ang - 0.4)) +
+        ' L' + r2(tip.x - head * Math.cos(ang + 0.4)) + ' ' + r2(tip.y - head * Math.sin(ang + 0.4)) +
+        ' Z" fill="' + col + '"/>');
     });
 
-    nodes.forEach(function (n) {
-      var pal = PALETTE[n.color];
-      var fill, line;
-      if (isHex(n.color)) {
-        fill = mixHex(n.color, dark ? '#1b1d23' : '#ffffff', dark ? 0.72 : 0.78);
-        line = n.color;
-      } else {
-        fill = (pal && pal.line) ? (dark ? pal.dark : pal.light) : baseFill;
-        line = (pal && pal.line) ? pal.line : baseLine;
-      }
+    /* ---- the boxes ---- */
+    live.forEach(function (n) {
+      var skin = mm.nodeLineOf(n, t);
       var x0 = n.x - n.w / 2, y0 = n.y - n.h / 2;
+      var common = ' fill="' + skin.fill + '" stroke="' + skin.line +
+                   '" stroke-width="' + skin.width + '"';
 
       if (n.shape === 'circle' || n.shape === 'ellipse') {
-        parts.push('<ellipse cx="' + n.x + '" cy="' + n.y + '" rx="' + (n.w / 2) +
-          '" ry="' + (n.h / 2) + '" fill="' + fill + '" stroke="' + line +
-          '" stroke-width="1"/>');
+        parts.push('<ellipse cx="' + r2(n.x) + '" cy="' + r2(n.y) + '" rx="' + r2(n.w / 2) +
+          '" ry="' + r2(n.h / 2) + '"' + common + '/>');
       } else if (n.shape === 'diamond') {
-        parts.push('<polygon points="' + n.x + ',' + y0 + ' ' + (x0 + n.w) + ',' + n.y +
-          ' ' + n.x + ',' + (y0 + n.h) + ' ' + x0 + ',' + n.y +
-          '" fill="' + fill + '" stroke="' + line + '" stroke-width="1"/>');
+        parts.push('<polygon points="' + r2(n.x) + ',' + r2(y0) + ' ' + r2(x0 + n.w) + ',' +
+          r2(n.y) + ' ' + r2(n.x) + ',' + r2(y0 + n.h) + ' ' + r2(x0) + ',' + r2(n.y) +
+          '"' + common + '/>');
       } else {
-        parts.push('<rect x="' + x0 + '" y="' + y0 + '" width="' + n.w + '" height="' + n.h +
-          '" rx="' + (n.shape === 'rect' || n.shape === 'square' ? 0 : 10) +
-          '" fill="' + fill + '" stroke="' + line + '" stroke-width="1"/>');
+        parts.push('<rect x="' + r2(x0) + '" y="' + r2(y0) + '" width="' + r2(n.w) +
+          '" height="' + r2(n.h) + '" rx="' +
+          (n.shape === 'rect' || n.shape === 'square' ? 0 : 10) + '"' + common + '/>');
       }
 
-      var blockH = n.lines.length * n.lh +
-                   (n.imgH ? n.imgH + (n.lines.length ? IMG_GAP : 0) : 0);
-      var cursorY = n.y - blockH / 2;
-      if (n.img && n.imgH) {
-        parts.push('<image x="' + (n.x - n.imgW / 2) + '" y="' + cursorY + '" width="' + n.imgW +
-          '" height="' + n.imgH + '" preserveAspectRatio="xMidYMid slice" href="' + n.img.url + '"/>');
-        cursorY += n.imgH + (n.lines.length ? IMG_GAP : 0);
-      }
-      n.lines.forEach(function (l, li) {
-        parts.push('<text x="' + n.x + '" y="' + (cursorY + li * n.lh + n.lh / 2) +
-          '" fill="' + text + '" font-size="' + n.fs + '" text-anchor="middle" ' +
-          'dominant-baseline="middle">' + esc(l) + '</text>');
+      /* Every picture, where the map put it. This is the whole reason the
+         export stopped guessing: a node's pictures are laid out by the map,
+         wrapped and scaled and each with a size of its own, and no second
+         copy of that arithmetic was ever going to stay in step. */
+      var block = mm._picBlock(n);
+      (n._pics || []).forEach(function (q) {
+        var rec = images[q.id];
+        if (!rec || !rec.url) return;
+        parts.push('<image x="' + r2(block.x + q.dx) + '" y="' + r2(block.y + q.dy) +
+          '" width="' + r2(q.w) + '" height="' + r2(q.h) +
+          '" preserveAspectRatio="xMidYMid slice" href="' + attr(rec.url) +
+          '" xlink:href="' + attr(rec.url) + '"/>');
       });
+
+      var tick = mm.tickBox(n);
+      var shiftText = tick ? tick.s * 0.7 : 0;
+      var blockH = n.lines.length * n._lh +
+                   (n.imgH ? n.imgH + (n.lines.length ? IMG_GAP : 0) : 0);
+      var cursorY = n.y - blockH / 2 + (n.imgH ? n.imgH + (n.lines.length ? IMG_GAP : 0) : 0);
+
+      n.lines.forEach(function (l, li) {
+        var ly = cursorY + li * n._lh + n._lh / 2;
+        parts.push('<text x="' + r2(n.x + shiftText) + '" y="' + r2(ly) + '" fill="' + t.text +
+          '" font-size="' + (n._fs || mm.fontSize) + '" text-anchor="middle" ' +
+          'dominant-baseline="central"' + (n.done ? ' opacity="0.55"' : '') + '>' +
+          esc(l) + '</text>');
+        if (n.done) {
+          // ruled through, the width of the words and no more
+          var lw2 = mm.measureText(l, n._fs || mm.fontSize);
+          parts.push('<path d="M' + r2(n.x + shiftText - lw2 / 2) + ' ' + r2(ly) +
+            ' L' + r2(n.x + shiftText + lw2 / 2) + ' ' + r2(ly) + '" stroke="' + t.text +
+            '" stroke-width="' + r2(Math.max(1, (n._fs || mm.fontSize) * 0.075)) +
+            '" opacity="0.55"/>');
+        }
+      });
+
+      if (tick) {
+        var half = tick.s / 2;
+        parts.push('<rect x="' + r2(tick.x - half) + '" y="' + r2(tick.y - half) +
+          '" width="' + r2(tick.s) + '" height="' + r2(tick.s) + '" rx="4" fill="' +
+          (n.done ? t.accent : (dark ? '#101219' : '#ffffff')) + '" stroke="' + t.accent +
+          '" stroke-width="' + r2(Math.max(1.8, tick.s * 0.13)) + '"/>');
+        if (n.done) {
+          parts.push('<path d="M' + r2(tick.x - half * 0.44) + ' ' + r2(tick.y + half * 0.04) +
+            ' L' + r2(tick.x - half * 0.08) + ' ' + r2(tick.y + half * 0.42) +
+            ' L' + r2(tick.x + half * 0.5) + ' ' + r2(tick.y - half * 0.42) +
+            '" fill="none" stroke="' + t.node + '" stroke-width="' +
+            r2(Math.max(1.6, tick.s * 0.14)) + '" stroke-linecap="round" ' +
+            'stroke-linejoin="round"/>');
+        }
+      }
     });
+
+    // the words on the relationships go on top of everything they cross
+    parts.push(labels.join(''));
     parts.push('</svg>');
     return parts.join('');
   };

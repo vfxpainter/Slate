@@ -214,7 +214,7 @@
       var mc = mapColors(dark);
       var svg = global.Mindmap && global.Mindmap.toSVG
         ? global.Mindmap.toSVG(note.map, {
-            node: mc.node, border: mc.border, edge: mc.edge, text: mc.text,
+            node: mc.node, border: mc.border, edge: mc.edge, text: mc.text, accent: mc.accent,
             background: mc.background, dark: dark, images: imgs,
             fontStack: contentFont().stack, fontSize: contentFont().size
           })
@@ -317,12 +317,20 @@
   }
 
   // Colours for a mindmap on the page or in a picture, either way up.
+  /* The accent comes from the app itself, so a tick box on paper is the same
+     colour as the one on screen. */
+  function accentColor() {
+    var v = (getComputedStyle(document.documentElement)
+      .getPropertyValue('--accent') || '').trim();
+    return v || '#c8a27a';
+  }
+
   function mapColors(dark) {
     return dark
       ? { node: '#242730', border: '#4d515d', edge: '#767b88',
-          text: '#e9e6df', background: '#14151a' }
+          text: '#e9e6df', background: '#14151a', accent: accentColor() }
       : { node: '#ffffff', border: '#c9c6bf', edge: '#8b8f9a',
-          text: '#151515', background: '#ffffff' };
+          text: '#151515', background: '#ffffff', accent: accentColor() };
   }
 
   function contentFont() {
@@ -371,7 +379,7 @@
       var f = contentFont();
       var mc = mapColors(dark);
       var svg = global.Mindmap.toSVG(note.map, {
-        node: mc.node, border: mc.border, edge: mc.edge, text: mc.text,
+        node: mc.node, border: mc.border, edge: mc.edge, text: mc.text, accent: mc.accent,
         background: mc.background, dark: dark, images: imgs,
         fontStack: f.stack, fontSize: f.size
       });

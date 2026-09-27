@@ -24,6 +24,7 @@
     pickedItems: {},      // list-item id -> true, for dragging several at once
     map: null,            // live Mindmap instance
     mapNoteId: null,      // note the canvas currently holds
+    keepView: null,       // the camera to hand back after an undo remounts
     editingNode: null,
     editingEdge: null,    // the relationship whose words are being typed    // node whose text is being edited on the canvas
     font: { family: 'system', size: 16 },
@@ -744,6 +745,17 @@
 
   function applyRecords(records) {
     var openId = S.note ? S.note.id : null;
+    /* Where you were looking, put aside. Undo is about the work, and the
+       remount that follows would otherwise fit the map to the window and
+       throw you somewhere else -- so the one thing you want to see, the bit
+       that just changed, is the bit that moves out from under you. */
+    S.keepView = (openId && S.map && S.mapNoteId === openId)
+      ? { cam: { x: S.map.cam.x, y: S.map.cam.y, s: S.map.cam.s },
+          sel: S.map.selection.map(function (n) { return n.id; }) }
+      : null;
+    // a written note has a place you were looking at too: how far down it is
+    var scroller = $('editorScroll');
+    var keepScroll = (openId && scroller) ? scroller.scrollTop : 0;
     clearTimeout(S.saveTimer);
     S.saveTimer = null;
     S.note = null;
@@ -755,8 +767,10 @@
       renderTree();
       renderList();
       renderSelectBar();
-      if (openId && byNoteId(openId)) openNote(openId);
-      else showEmpty();
+      if (openId && byNoteId(openId)) {
+        openNote(openId);
+        if (keepScroll && scroller) scroller.scrollTop = keepScroll;
+      } else showEmpty();
       renderTagRow();
       renderStorage();
     });
@@ -3735,7 +3749,8 @@ function toggleImgFree() {
         elx.classList.toggle('dimmed', !one);
       });
     });
-    $('mapColors').classList.toggle('dimmed', !any);
+    var edge = S.map && S.map.selectedEdge;
+    $('mapColors').classList.toggle('dimmed', !any && !edge);
 
     var chosen = S.map && S.map.selectedPic;
     ['map-pic-bigger', 'map-pic-smaller', 'map-pic-reset', 'map-pic-change'].forEach(function (a) {
@@ -3751,7 +3766,9 @@ function toggleImgFree() {
       });
 
     Array.prototype.forEach.call($('mapColors').children, function (b) {
-      b.classList.toggle('on', one && (node.color || 'plain') === b.dataset.color);
+      var mine = edge ? (edge.color || 'plain')
+                      : (one ? (node.color || 'plain') : null);
+      b.classList.toggle('on', mine !== null && mine === b.dataset.color);
     });
 
     var tag = $('mapSelCount');
@@ -4272,7 +4289,8 @@ function toggleImgFree() {
     if (cc && !cc.dataset.wired) {
       cc.dataset.wired = '1';
       cc.oninput = function () {
-        if (!S.map.setColor(cc.value)) toast('Select a node first.');
+        if (S.map.selectedEdge) S.map.setEdgeColor(cc.value);
+        else if (!S.map.setColor(cc.value)) toast('Select a node or a link first.');
         renderMapTools(S.map.selected);
       };
     }
@@ -4280,10 +4298,25 @@ function toggleImgFree() {
     $('mapEditor').classList.add('style-off');
     $('styleBtn').classList.remove('on');
     renderMapTools(null);
+    var keep = S.keepView;
+    S.keepView = null;
+    if (keep) {
+      /* Put back at once rather than a frame later: waiting would draw the
+         map once at the wrong place first, which is the flicker this is
+         meant to stop. Resizing does not touch the camera, so the frame
+         below can still do its work. */
+      S.map.cam.x = keep.cam.x;
+      S.map.cam.y = keep.cam.y;
+      S.map.cam.s = keep.cam.s;
+      var again = keep.sel.map(function (id) { return S.map.byId(id); })
+        .filter(Boolean);
+      if (again.length) S.map.selectMany(again);
+      renderMapTools(S.map.selected);
+    }
     requestAnimationFrame(function () {
       if (S.mapNoteId !== (S.note && S.note.id)) return;
       S.map.resize();
-      S.map.fit();
+      if (!keep) S.map.fit();
     });
   }
 
@@ -6441,8 +6474,20 @@ function toggleImgFree() {
       focusMap();
     },
     'map-color': function (e, t) {
+      /* With a link chosen the swatches colour the link. Picking a colour is
+         the same gesture either way, so it is the same row of swatches --
+         a second one that only appeared for links would be a row of buttons
+         that is empty most of the time. */
+      if (S.map.selectedEdge) {
+        S.map.setEdgeColor(t.dataset.color);
+        toast(t.dataset.color === 'plain' ? 'Link back to its usual colour'
+                                          : 'Link coloured');
+        renderMapTools(S.map.selected);
+        focusMap();
+        return;
+      }
       var n = S.map.setColor(t.dataset.color);
-      if (!n) { toast('Select a node first.'); return; }
+      if (!n) { toast('Select a node or a link first.'); return; }
       if (n > 1) toast('Coloured ' + plural(n, 'node'));
       renderMapTools(S.map.selected);
       focusMap();
