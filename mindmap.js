@@ -236,6 +236,7 @@
         h0: n.h0 || 0,           // manual height; 0 = size to content
         collapsed: !!n.collapsed, // its branch is folded away behind a handle
         free: !!n.free,          // put here by hand; auto-arrange leaves it be
+        layout: n.layout || null, // this branch grows its own way
         checklist: !!n.checklist, // its children carry boxes to tick
         done: !!n.done,          // and this one has been ticked
         noteId: n.noteId || null // reserved: the note this node stands for
@@ -249,7 +250,12 @@
       if (e.w) out.w = e.w;
       /* A relationship, not a branch: it says two things are connected
          without either being under the other, and carries its own words. */
-      if (e.rel) { out.rel = true; out.label = e.label || ''; }
+      if (e.rel) {
+        out.rel = true;
+        out.label = e.label || '';
+        if (e.k1) out.k1 = { a: +e.k1.a || 0, o: +e.k1.o || 0 };
+        if (e.k2) out.k2 = { a: +e.k2.a || 0, o: +e.k2.o || 0 };
+      }
       return out;
     });
     var st = (map && map.style) || {};
@@ -269,6 +275,7 @@
     this.linkFrom = null;
     this.branchColors = st.branch === undefined ? this.nodes.length <= 1 : !!st.branch;
     this._branches = null;
+    this._hasBranchLayout = null;      // a fresh map, so work it out again
     this._ensureImages();
     this._layout();
     this._prune();
@@ -291,6 +298,7 @@
         if (n.h0) o.h0 = Math.round(n.h0);
         if (n.collapsed) o.collapsed = true;
         if (n.free) o.free = true;
+        if (n.layout && LAYOUTS[n.layout]) o.layout = n.layout;
         if (n.checklist) o.checklist = true;
         if (n.done) o.done = true;
         if (n.noteId) o.noteId = n.noteId;
@@ -300,7 +308,12 @@
         var o = { a: e.a, b: e.b };
         if (e.t) o.t = e.t;
         if (e.w) o.w = e.w;
-        if (e.rel) { o.rel = true; if (e.label) o.label = e.label; }
+        if (e.rel) {
+          o.rel = true;
+          if (e.label) o.label = e.label;
+          if (e.k1) o.k1 = e.k1;
+          if (e.k2) o.k2 = e.k2;
+        }
         return o;
       }),
       style: {
@@ -366,10 +379,24 @@
       seen[key] = true;
       return true;
     });
+
+    /* One parent, always. A branch line arriving at a node that already has a
+       parent is not a second place in the order -- there is no such thing --
+       so it becomes a relationship, which is what a link between two children
+       means. Maps built before the rule existed are tidied up here. */
+    var taken = {};
+    this.edges.forEach(function (e) {
+      if (e.rel) return;
+      if (taken[e.b]) {
+        e.rel = true;
+        if (e.label === undefined) e.label = '';
+      } else taken[e.b] = true;
+    });
   };
 
   Mindmap.prototype._changed = function () {
     this._branches = null;
+    this._hasBranchLayout = null;      // work it out again when next asked
     this._prune();
     if (this.auto) this.arrange();
     if (this.opts.onChange) this.opts.onChange();
@@ -947,18 +974,30 @@
       var ra = borderPoint(a, b), rb = borderPoint(b, a);
       var dx = rb.x - ra.x, dy = rb.y - ra.y;
       var len = Math.hypot(dx, dy) || 1;
-      var lift = Math.min(90, Math.max(34, len * 0.3));
-      var nx = -dy / len * lift, ny = dx / len * lift;
+      var ux = dx / len, uy = dy / len;          // along the line between them
+      var px = -uy, py = ux;                     // and square across it
+      /* Both control points live in that frame: how far along, and how far
+         out, as fractions of the distance between the two nodes. Kept this
+         way, a curve you have shaped by hand keeps its shape when either node
+         moves, instead of springing back or shearing. An untouched one falls
+         back to the arc it has always had. */
+      var lift = Math.min(90, Math.max(34, len * 0.3)) / len;
+      var k1 = e.k1 || { a: 0.25, o: lift };
+      var k2 = e.k2 || { a: 0.75, o: lift };
       return {
         a: ra, b: rb, rel: true,
-        c1: { x: ra.x + dx * 0.25 + nx, y: ra.y + dy * 0.25 + ny },
-        c2: { x: ra.x + dx * 0.75 + nx, y: ra.y + dy * 0.75 + ny }
+        c1: { x: ra.x + (ux * k1.a + px * k1.o) * len,
+              y: ra.y + (uy * k1.a + py * k1.o) * len },
+        c2: { x: ra.x + (ux * k2.a + px * k2.o) * len,
+              y: ra.y + (uy * k2.a + py * k2.o) * len },
+        frame: { ox: ra.x, oy: ra.y, ux: ux, uy: uy, px: px, py: py, len: len }
       };
     }
     /* In a tidy map every child sits to the right of its parent, so the line
        leaves the parent's side and arrives at the child's, like a chart --
        rather than pointing at the middle of each box. */
-    if (this.auto && b.y > a.y + a.h / 2 && this.layout === 'down') {
+    var grows = this.layoutOf(a);          // the way THIS branch runs
+    if (this.auto && b.y > a.y + a.h / 2 && grows === 'down') {
       var pd1 = { x: a.x, y: a.y + a.h / 2 };
       var pd2 = { x: b.x, y: b.y - b.h / 2 };
       var drop = Math.max(14, (pd2.y - pd1.y) * 0.55);
@@ -968,7 +1007,7 @@
         c2: { x: pd2.x, y: pd2.y - drop }
       };
     }
-    if (this.auto && this.layout !== 'down' && Math.abs(b.x - a.x) > (a.w + b.w) / 4) {
+    if (this.auto && grows !== 'down' && Math.abs(b.x - a.x) > (a.w + b.w) / 4) {
       var side = b.x > a.x ? 1 : -1;
       var pa2 = { x: a.x + side * a.w / 2, y: a.y };
       var pb2 = { x: b.x - side * b.w / 2, y: b.y };
@@ -1035,11 +1074,92 @@
     return null;
   };
 
+  var KNOB_R = 7;        // the dot you drag to bend a relationship
   var HANDLE_R = 6;      // world-space radius of a connector dot
   var GRIP = 9;          // resize grip square
   var FOLD_R = 9;        // the circle that folds a branch away
   var PIC_GRIP_R = 7;    // the corner you drag to resize a picture
   var TICK = 19;         // the box on a child of a checklist
+
+  /* The two points that shape a relationship's curve, in world space. Only
+     the selected one shows them: every relationship wearing handles would be
+     a map full of dots. */
+  Mindmap.prototype.edgeKnobs = function (e) {
+    if (!e || !e.rel) return null;
+    var ends = this.edgeEnds(e);
+    if (!ends || !ends.frame) return null;
+    return [{ i: 1, x: ends.c1.x, y: ends.c1.y },
+            { i: 2, x: ends.c2.x, y: ends.c2.y }];
+  };
+
+  Mindmap.prototype.hitEdgeKnob = function (px, py) {
+    var ks = this.edgeKnobs(this.selectedEdge);
+    if (!ks) return null;
+    var p = this.toWorld(px, py);
+    var r = Math.max(9, KNOB_R * 1.6 / this.cam.s);
+    for (var i = 0; i < ks.length; i++) {
+      if (Math.hypot(p.x - ks[i].x, p.y - ks[i].y) <= r) {
+        return { edge: this.selectedEdge, i: ks[i].i };
+      }
+    }
+    return null;
+  };
+
+  // Put one control point where the hand is, written down in the chord's frame.
+  Mindmap.prototype.moveEdgeKnob = function (e, i, px, py) {
+    if (!e || !e.rel) return false;
+    var ends = this.edgeEnds(e);
+    if (!ends || !ends.frame) return false;
+    var f = ends.frame, p = this.toWorld(px, py);
+    function frameOf(q) {
+      var rx = q.x - f.ox, ry = q.y - f.oy;
+      return {
+        a: Math.round(((rx * f.ux + ry * f.uy) / f.len) * 10000) / 10000,
+        o: Math.round(((rx * f.px + ry * f.py) / f.len) * 10000) / 10000
+      };
+    }
+    /* Touch one and both are written down. Leaving the other on the automatic
+       arc means it drifts the next time a node moves, so the shape you let go
+       of is not the shape you come back to. */
+    if (!e.k1) e.k1 = frameOf(ends.c1);
+    if (!e.k2) e.k2 = frameOf(ends.c2);
+    if (i === 1) e.k1 = frameOf(p); else e.k2 = frameOf(p);
+    this.draw();
+    return true;
+  };
+
+  // back to the arc it was born with
+  Mindmap.prototype.resetEdgeCurve = function (e) {
+    if (!e || !e.rel || (!e.k1 && !e.k2)) return false;
+    delete e.k1;
+    delete e.k2;
+    this._changed();
+    return true;
+  };
+
+  /* The words on a relationship, as a thing you can point at. Their box is
+     worked out while drawing and remembered on the edge. */
+  Mindmap.prototype.hitEdgeLabel = function (px, py) {
+    var p = this.toWorld(px, py);
+    for (var i = this.edges.length - 1; i >= 0; i--) {
+      var e = this.edges[i], box = e._label;
+      if (!e.rel || !box) continue;
+      if (Math.abs(p.x - box.x) <= box.w / 2 &&
+          Math.abs(p.y - box.y) <= box.h / 2) return e;
+    }
+    return null;
+  };
+
+  // where the words sit on screen, for putting a text box over them
+  Mindmap.prototype.edgeLabelBox = function (e) {
+    if (!e || !e.rel || !e._label) return null;
+    var b = e._label, s = this.cam.s;
+    return {
+      left: b.x * s + this.cam.x - (b.w * s) / 2,
+      top: b.y * s + this.cam.y - (b.h * s) / 2,
+      w: b.w * s, h: b.h * s
+    };
+  };
 
   // Connector dots sit at the middle of each side.
   Mindmap.prototype.handlePoints = function (n) {
@@ -1087,13 +1207,14 @@
     var cx = 0, cy = 0;
     kids.forEach(function (k) { cx += k.x; cy += k.y; });
     cx /= kids.length; cy /= kids.length;
-    if (this.layout === 'down' && this.auto) {
+    var grow = this.layoutOf(n);
+    if (grow === 'down' && this.auto) {
       return { x: n.x, y: n.y + n.h / 2 };
     }
     var side = cx >= n.x ? 1 : -1;
     // a collapsed node's children sit on top of it, so fall back to the way
-    // the map grows rather than to wherever they happen to be
-    if (n.collapsed) side = this.layout === 'left' ? -1 : 1;
+    // the branch grows rather than to wherever they happen to be
+    if (n.collapsed) side = grow === 'left' ? -1 : 1;
     return { x: n.x + side * n.w / 2, y: n.y };
   };
 
@@ -1386,7 +1507,7 @@
     var p = parent || this.selected;
     if (!p) return this.addNode();
     var kids = this.edges.filter(function (e) { return e.a === p.id; }).length;
-    var away = this.layout === 'left' ? -1 : 1;
+    var away = this.layoutOf(p) === 'left' ? -1 : 1;
     var n = {
       id: DB.uid(),
       text: 'Idea',
@@ -1439,7 +1560,7 @@
         return {
           text: n.text, color: n.color, shape: n.shape, image: n.image,
           pics: (n.pics || []).slice(), picS: (n.picS || []).slice(),
-          checklist: n.checklist, done: n.done,
+          layout: n.layout, checklist: n.checklist, done: n.done,
           fs: n.fs, w0: n.w0, h0: n.h0,
           dx: n.x - picked[0].x, dy: n.y - picked[0].y
         };
@@ -1474,6 +1595,7 @@
         id: DB.uid(),
         text: c.text, color: c.color, shape: c.shape, image: c.image || null,
         pics: (c.pics || []).slice(), picS: (c.picS || []).slice(),
+        layout: c.layout || undefined,
         checklist: !!c.checklist, done: !!c.done,
         fs: c.fs, w0: c.w0, h0: c.h0,
         x: baseX + c.dx, y: baseY + c.dy,
@@ -1486,7 +1608,12 @@
     clip.edges.forEach(function (e) {
       if (made[e.a] && made[e.b]) {
         var cp = { a: made[e.a].id, b: made[e.b].id, type: e.type, width: e.width };
-        if (e.rel) { cp.rel = true; cp.label = e.label || ''; }
+        if (e.rel) {
+          cp.rel = true;
+          cp.label = e.label || '';
+          if (e.k1) cp.k1 = { a: e.k1.a, o: e.k1.o };
+          if (e.k2) cp.k2 = { a: e.k2.a, o: e.k2.o };
+        }
         this.edges.push(cp);
       }
     }, this);
@@ -1562,102 +1689,154 @@
       });
     });
 
-    /* A branch is measured across the way it grows: a map growing sideways
-       needs height for each branch, one growing downwards needs width. */
-    var band = {};
-    function measure(id) {
-      var total = 0;
-      tree[id].forEach(function (c, i) {
-        total += measure(c) + (i ? (down ? gx : gy) : 0);
-      });
-      band[id] = Math.max(down ? byId[id].w : byId[id].h, total);
-      return band[id];
-    }
+    /* ---- which way each branch grows ----
+       A node can carry a layout of its own, and then everything below it
+       follows that one instead of the map's. It is how one map holds a
+       timeline running downwards next to a list running right: the rule is
+       inherited, so it is set once at the top of a branch, not on every node
+       in it. Anything without one uses whatever it inherited. */
+    var dirOf = {};
 
-    // sideways: `edge` is the side of the node facing its parent
-    function placeSide(id, edge, top, sign) {
+    /* ---- how much room a branch needs ----
+       With one layout for the whole map a single number was enough: the
+       branch's span across the way it grows. Mixed layouts need both sides of
+       it, because a branch running downwards is wide where its neighbour
+       running right is tall. So every branch is measured as a box, and a
+       parent reserves the box rather than a band. */
+    var box = {}, sideW = {};
+    function measure(id, inherited) {
       var n = byId[id];
-      n.x = edge + sign * n.w / 2;
-      n.y = top + band[id] / 2;
-      var total = 0;
-      tree[id].forEach(function (c, i) { total += band[c] + (i ? gy : 0); });
-      var y = n.y - total / 2;
-      var next = n.x + sign * (n.w / 2 + gx);
-      tree[id].forEach(function (c) {
-        placeSide(c, next, y, sign);
-        y += band[c] + gy;
-      });
-    }
+      var own = byId[id].layout;
+      var d = (own && LAYOUTS[own]) ? own : inherited;
+      dirOf[id] = d;
+      var mine = tree[id];
+      if (!mine.length) { box[id] = { w: n.w, h: n.h }; return box[id]; }
 
-    function placeDown(id, left, topY) {
-      var n = byId[id];
-      n.x = left + band[id] / 2;
-      n.y = topY + n.h / 2;
-      var total = 0;
-      tree[id].forEach(function (c, i) { total += band[c] + (i ? gx : 0); });
-      var x = n.x - total / 2;
-      var below = topY + n.h + gdown;
-      tree[id].forEach(function (c) {
-        placeDown(c, x, below);
-        x += band[c] + gx;
-      });
-    }
-
-    // both sides: the root's branches are split left and right, then each
-    // side is laid out as its own little map
-    function placeBoth(id) {
-      var n = byId[id];
-      var own = tree[id].slice();
-      var right = [], left = [];
-      own.forEach(function (c, i) { (i % 2 ? left : right).push(c); });
-      [[right, 1], [left, -1]].forEach(function (pair) {
-        var list = pair[0], sign = pair[1];
-        var total = 0;
-        list.forEach(function (c, i) { total += band[c] + (i ? gy : 0); });
-        var y = n.y - total / 2;
-        var edge = n.x + sign * (n.w / 2 + gx);
-        list.forEach(function (c) {
-          placeSide(c, edge, y, sign);
-          y += band[c] + gy;
+      var i, cb, run = 0, across = 0;
+      if (d === 'down') {
+        for (i = 0; i < mine.length; i++) {
+          cb = measure(mine[i], d);
+          run += cb.w + (i ? gx : 0);
+          across = Math.max(across, cb.h);
+        }
+        box[id] = { w: Math.max(n.w, run), h: n.h + gdown + across };
+      } else if (d === 'both') {
+        // the branches split left and right, and each side is its own column
+        var sides = [[], []];                          // 0 right, 1 left
+        mine.forEach(function (c, k) { sides[k % 2].push(c); });
+        var w = [0, 0], h = [0, 0];
+        sides.forEach(function (list, k) {
+          list.forEach(function (c, j) {
+            var b = measure(c, d);
+            h[k] += b.h + (j ? gy : 0);
+            w[k] = Math.max(w[k], b.w);
+          });
         });
-      });
+        sideW[id] = w;
+        box[id] = {
+          w: n.w + (w[0] ? gx + w[0] : 0) + (w[1] ? gx + w[1] : 0),
+          h: Math.max(n.h, h[0], h[1])
+        };
+      } else {
+        for (i = 0; i < mine.length; i++) {
+          cb = measure(mine[i], d);
+          run += cb.h + (i ? gy : 0);
+          across = Math.max(across, cb.w);
+        }
+        box[id] = { w: n.w + gx + across, h: Math.max(n.h, run) };
+      }
+      return box[id];
     }
 
-    roots.forEach(function (r) { measure(r.id); });
-    var first = roots[0];
-    if (down) {
-      var left = first.x - band[first.id] / 2, topY = first.y - first.h / 2;
-      roots.forEach(function (r) {
-        if (r.free) {
-          placeDown(r.id, r.x - band[r.id] / 2, r.y - r.h / 2);
-          return;
+    /* Put a branch inside the box measured for it, top-left first. Because
+       each child owns a box of its own, a child that grows the other way
+       fills its box from the far end and never doubles back over its parent. */
+    function place(id, left, top) {
+      var n = byId[id], b = box[id], d = dirOf[id], mine = tree[id];
+      var i, x, y, run = 0;
+
+      if (d === 'down') {
+        n.x = left + b.w / 2;
+        n.y = top + n.h / 2;
+        if (!mine.length) return;
+        for (i = 0; i < mine.length; i++) run += box[mine[i]].w + (i ? gx : 0);
+        x = left + (b.w - run) / 2;
+        var below = top + n.h + gdown;
+        for (i = 0; i < mine.length; i++) {
+          place(mine[i], x, below);
+          x += box[mine[i]].w + gx;
         }
-        placeDown(r.id, left, topY);
-        left += band[r.id] + gx * 3;
-      });
-    } else if (dir === 'both') {
-      var cy = first.y;
-      roots.forEach(function (r) {
-        if (r.free) { placeBoth(r.id); return; }
-        byId[r.id].y = cy;
-        placeBoth(r.id);
-        cy += band[r.id] + gy * 4;
-      });
-    } else {
-      var sign = dir === 'left' ? -1 : 1;
-      var edge = first.x + sign * (-first.w / 2);
-      var top = first.y - band[first.id] / 2;
-      roots.forEach(function (r) {
-        // a node put somewhere by hand keeps its place; only its own
-        // branch is tidied, around where you left it
-        if (r.free) {
-          placeSide(r.id, r.x - sign * r.w / 2, r.y - band[r.id] / 2, sign);
-          return;
-        }
-        placeSide(r.id, edge, top, sign);
-        top += band[r.id] + gy * 4;
-      });
+        return;
+      }
+
+      if (d === 'both') {
+        var sides = [[], []];
+        mine.forEach(function (c, k) { sides[k % 2].push(c); });
+        var w = sideW[id] || [0, 0];
+        n.x = left + (w[1] ? w[1] + gx : 0) + n.w / 2;
+        n.y = top + b.h / 2;
+        sides.forEach(function (list, k) {
+          if (!list.length) return;
+          var tot = 0;
+          list.forEach(function (c, j) { tot += box[c].h + (j ? gy : 0); });
+          var cy = n.y - tot / 2;
+          list.forEach(function (c) {
+            var cl = k === 0 ? n.x + n.w / 2 + gx
+                             : n.x - n.w / 2 - gx - box[c].w;
+            place(c, cl, cy);
+            cy += box[c].h + gy;
+          });
+        });
+        return;
+      }
+
+      var leftward = d === 'left';
+      n.x = leftward ? left + b.w - n.w / 2 : left + n.w / 2;
+      n.y = top + b.h / 2;
+      if (!mine.length) return;
+      for (i = 0; i < mine.length; i++) run += box[mine[i]].h + (i ? gy : 0);
+      y = n.y - run / 2;
+      for (i = 0; i < mine.length; i++) {
+        var kid = mine[i];
+        place(kid, leftward ? n.x - n.w / 2 - gx - box[kid].w : n.x + n.w / 2 + gx, y);
+        y += box[kid].h + gy;
+      }
     }
+
+    /* A box's top-left, given where its own node should end up. Which corner
+       that is depends on the way the branch grows, so it is worked out here
+       once rather than at every call site. */
+    function origin(id, nx, ny) {
+      var n = byId[id], b = box[id], d = dirOf[id], lx;
+      if (d === 'left') lx = nx + n.w / 2 - b.w;
+      else if (d === 'down') lx = nx - b.w / 2;
+      else if (d === 'both') {
+        var w = sideW[id] || [0, 0];
+        lx = nx - n.w / 2 - (w[1] ? w[1] + gx : 0);
+      } else lx = nx - n.w / 2;
+      return { x: lx, y: d === 'down' ? ny - n.h / 2 : ny - b.h / 2 };
+    }
+
+    roots.forEach(function (r) { measure(r.id, dir); });
+
+    var cx = null, cy = null;
+    roots.forEach(function (r) {
+      // a node put somewhere by hand keeps its place; only its own
+      // branch is tidied, around where you left it
+      if (r.free) {
+        var o = origin(r.id, r.x, r.y);
+        place(r.id, o.x, o.y);
+        return;
+      }
+      if (cx === null) {
+        var first = origin(r.id, r.x, r.y);
+        cx = first.x;
+        cy = first.y;
+      }
+      place(r.id, cx, cy);
+      if (down) cx += box[r.id].w + gx * 3;
+      else cy += box[r.id].h + gy * 4;
+    });
 
     // anything that moved glides there rather than jumping
     var now = Date.now();
@@ -1668,6 +1847,45 @@
       n._from = old;
       n._t0 = now;
     });
+  };
+
+  /* Which way a node's children grow. A node can carry a layout of its own
+     and everything below it follows; without one it inherits from whichever
+     ancestor does, and failing that from the map. */
+  Mindmap.prototype.layoutOf = function (node) {
+    var map = LAYOUTS[this.layout] ? this.layout : 'right';
+    /* Walking up the tree for every edge on every frame is real work, and
+       almost every map has no branch of its own to find. One pass over the
+       nodes after a change settles it, and the walk only happens when there
+       is something up there to walk to. */
+    if (this._hasBranchLayout === null || this._hasBranchLayout === undefined) {
+      this._hasBranchLayout = this.nodes.some(function (n) {
+        return !!(n.layout && LAYOUTS[n.layout]);
+      });
+    }
+    if (!this._hasBranchLayout) return map;
+    var n = node, guard = 0;
+    while (n && guard++ < 128) {
+      if (n.layout && LAYOUTS[n.layout]) return n.layout;
+      n = this.parentOf(n);
+    }
+    return map;
+  };
+
+  /* Give one branch a layout of its own, or take it away again so the branch
+     goes back to following the map. */
+  Mindmap.prototype.setBranchLayout = function (node, name) {
+    if (!node) return null;
+    if (name && LAYOUTS[name]) node.layout = name;
+    else delete node.layout;
+    if (!this.auto) this.auto = true;         // a layout only means anything tidied
+    this._changed();
+    return node.layout || null;
+  };
+
+  // does this branch differ from what it would otherwise inherit?
+  Mindmap.prototype.branchLayout = function (node) {
+    return (node && node.layout && LAYOUTS[node.layout]) ? node.layout : null;
   };
 
   Mindmap.prototype.setLayout = function (name) {
@@ -1731,7 +1949,7 @@
       var k = self.byId(e.b);
       if (k && k !== node) kids.push(k);
     });
-    var away = this.layout === 'left' ? -1 : 1;
+    var away = this.layoutOf(parent) === 'left' ? -1 : 1;
     var x = parent.x + away * (parent.w / 2 + this.gapX * 0.6 + node.w / 2);
     var y = parent.y;
     if (kids.length) {
@@ -2818,6 +3036,38 @@
       ctx.stroke();
     }
 
+    /* The two handles on the chosen relationship, with a thin line back to
+       the end each one governs -- so which dot bends which half of the curve
+       is something you can see rather than something you discover. */
+    var knobs = this.edgeKnobs(this.selectedEdge);
+    if (knobs) {
+      var ke = this.edgeEnds(this.selectedEdge);
+      var kr = Math.max(5, KNOB_R / this.cam.s);
+      ctx.save();
+      ctx.strokeStyle = t.accent;
+      ctx.lineWidth = Math.max(0.8, 1 / this.cam.s);
+      ctx.globalAlpha = 0.45;
+      ctx.setLineDash([3 / this.cam.s, 3 / this.cam.s]);
+      ctx.beginPath();
+      ctx.moveTo(ke.a.x, ke.a.y);
+      ctx.lineTo(knobs[0].x, knobs[0].y);
+      ctx.moveTo(ke.b.x, ke.b.y);
+      ctx.lineTo(knobs[1].x, knobs[1].y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      knobs.forEach(function (k) {
+        ctx.beginPath();
+        ctx.arc(k.x, k.y, kr, 0, Math.PI * 2);
+        ctx.fillStyle = t.accent;
+        ctx.fill();
+        ctx.lineWidth = Math.max(1.2, 1.6 / this.cam.s);
+        ctx.strokeStyle = t.node;
+        ctx.stroke();
+      }, this);
+      ctx.restore();
+    }
+
     /* The blade, and the links it has caught so far shown struck through. */
     if (this._blade && this._blade.pts.length > 1) {
       var bp = this._blade.pts;
@@ -2941,6 +3191,16 @@
         self._picMove = false;
         self._dropOn = null;
         self._drag = { pan: true, sx: p.x, sy: p.y, cx: self.cam.x, cy: self.cam.y };
+        c.style.cursor = 'grabbing';
+        return;
+      }
+
+      /* A handle on the chosen relationship comes before anything else: it
+         floats free of the boxes and can easily be lying over one. */
+      var knob = self.linkMode ? null : self.hitEdgeKnob(p.x, p.y);
+      if (knob) {
+        self._knob = knob;
+        self._drag = null;
         c.style.cursor = 'grabbing';
         return;
       }
@@ -3070,7 +3330,7 @@
           movers: movers.map(function (m) { return { n: m, dx: m.x - w.x, dy: m.y - w.y }; })
         };
       } else {
-        var edge2 = self.hitEdge(p.x, p.y);
+        var edge2 = self.hitEdgeLabel(p.x, p.y) || self.hitEdge(p.x, p.y);
         if (edge2) {
           self.selection = [];
           self.selected = null;
@@ -3109,6 +3369,11 @@
 
     c.addEventListener('pointermove', function (e) {
       var lp0 = self._localPoint(e);
+
+      if (self._knob) {
+        self.moveEdgeKnob(self._knob.edge, self._knob.i, lp0.x, lp0.y);
+        return;
+      }
 
       if (self._resizing) {
         var wp = self.toWorld(lp0.x, lp0.y);
@@ -3164,6 +3429,11 @@
       if (!self._drag && !self._pinch) {
         var over = self.hit(lp0.x, lp0.y);
         if (over !== self._hover) { self._hover = over; self.draw(); }
+        if (!self.linkMode && !over) {
+          var grabbable = self.hitEdgeKnob(lp0.x, lp0.y);
+          var words = grabbable ? null : self.hitEdgeLabel(lp0.x, lp0.y);
+          c.style.cursor = grabbable ? 'grab' : (words ? 'text' : '');
+        }
       }
       if (!self._pointers.has(e.pointerId)) return;
       self._pointers.set(e.pointerId, self._localPoint(e));
@@ -3278,6 +3548,14 @@
     function endPointer(e) {
       clearTimeout(self._pressTimer);
       self._pressTimer = null;
+
+      if (self._knob) {
+        self._knob = null;
+        c.style.cursor = '';
+        self._changed();                       // one save, at the end of the drag
+        self._pointers.delete(e.pointerId);
+        return;
+      }
       if (e.button === 1 || (self._drag && self._drag.pan)) {
         c.style.cursor = self.linkMode ? 'crosshair' : '';
       }
@@ -3360,9 +3638,14 @@
             return (x.a === from.id && x.b === drop.id) || (x.a === drop.id && x.b === from.id);
           });
           if (!dup) {
-            self.edges.push({ a: from.id, b: drop.id });
-            self._changed();
-            if (self.opts.onLinkStep) self.opts.onLinkStep('linked');
+            /* A relationship, the same as the link tool makes. A branch comes
+               from carrying one node onto another, and a node has exactly one
+               parent -- so a thread drawn between two of them can only be the
+               other sort of connection, the kind with words on it. */
+            var made = self.relate(from, drop, '');
+            self.selectedEdge = made;
+            if (self.opts.onEdgeSelect) self.opts.onEdgeSelect(made);
+            if (self.opts.onLinkStep) self.opts.onLinkStep('related');
           } else if (self.opts.onLinkStep) {
             self.opts.onLinkStep('duplicate');
           }
@@ -3457,6 +3740,21 @@
     c.addEventListener('dblclick', function (e) {
       if (self.linkMode) return;
       var p = self._localPoint(e);
+
+      // a handle, double-clicked, gives the curve its plain arc back
+      var kn = self.hitEdgeKnob(p.x, p.y);
+      if (kn) { self.resetEdgeCurve(kn.edge); return; }
+
+      /* The words on a relationship are edited where they lie, like a node's
+         are -- a dialog for three words in the middle of a map is a detour. */
+      var lab = self.hitEdgeLabel(p.x, p.y);
+      if (lab) {
+        self.selectedEdge = lab;
+        self.draw();
+        if (self.opts.onEdgeRename) self.opts.onEdgeRename(lab);
+        return;
+      }
+
       var n = self.hit(p.x, p.y);
       if (n && self.opts.onRename) {
         self.select(n);

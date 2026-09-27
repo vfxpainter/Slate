@@ -24,7 +24,8 @@
     pickedItems: {},      // list-item id -> true, for dragging several at once
     map: null,            // live Mindmap instance
     mapNoteId: null,      // note the canvas currently holds
-    editingNode: null,    // node whose text is being edited on the canvas
+    editingNode: null,
+    editingEdge: null,    // the relationship whose words are being typed    // node whose text is being edited on the canvas
     font: { family: 'system', size: 16 },
     dateFormat: 'relative',
     uiScale: 100,         // per cent; scales the interface, this app only
@@ -3490,6 +3491,7 @@ function toggleImgFree() {
      one undo step rather than one per letter. */
   function sizeNodeEdit() {
     var node = S.editingNode;
+    if (S.editingEdge) { sizeEdgeEdit(); return; }
     if (!node || !S.map) return;
     var ta = $('mapInlineEdit');
     node.text = ta.value;
@@ -3521,8 +3523,59 @@ function toggleImgFree() {
     ta.select();
   }
 
+  /* The words on a relationship, edited in place. It borrows the same box a
+     node uses: one text box on the map, wherever the words happen to be. */
+  function startEdgeLabelEdit(edge) {
+    if (!edge || !S.map) return;
+    // never drawn yet, so there is nowhere to put the box: ask in a dialog
+    var box = S.map.edgeLabelBox(edge);
+    if (!box) { labelRelationDialog(); return; }
+    var ta = $('mapInlineEdit');
+    ta.style.fontSize = Math.max(9, S.font.size * 0.82 * S.map.cam.s) + 'px';
+    ta.style.fontFamily = FONTS[S.font.family].stack;
+    ta.value = edge.label || '';
+    ta.hidden = false;
+    S.editingEdge = edge;
+    sizeEdgeEdit();
+    ta.focus();
+    ta.select();
+  }
+
+  /* Wide enough for what is in it, and it stays centred on the arc as it
+     grows -- a fixed box either crops the words or leaves a gap. */
+  function sizeEdgeEdit() {
+    var edge = S.editingEdge;
+    if (!edge || !S.map) return;
+    var box = S.map.edgeLabelBox(edge);
+    if (!box) return;
+    var ta = $('mapInlineEdit');
+    var pad = 22;
+    var w = Math.max(90, measureInline(ta.value || edge.label || '', ta.style.fontSize,
+                                       ta.style.fontFamily) + pad);
+    var h = Math.max(24, box.h);
+    ta.style.left = (box.left + box.w / 2 - w / 2) + 'px';
+    ta.style.top = (box.top + box.h / 2 - h / 2) + 'px';
+    ta.style.width = w + 'px';
+    ta.style.height = h + 'px';
+  }
+
+  var _measureCtx = null;
+  function measureInline(text, size, family) {
+    if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+    _measureCtx.font = (size || '14px') + ' ' + (family || 'sans-serif');
+    return _measureCtx.measureText(text || '').width;
+  }
+
   function commitNodeEdit(then) {
     var ta = $('mapInlineEdit');
+    if (!ta.hidden && S.editingEdge) {
+      var edge = S.editingEdge;
+      S.editingEdge = null;
+      ta.hidden = true;
+      S.map.labelEdge(edge, ta.value);
+      if (then) then(); else focusMap();
+      return;
+    }
     if (ta.hidden || !S.editingNode) { if (then) then(); return; }
     var node = S.editingNode;
     S.editingNode = null;
@@ -3543,6 +3596,12 @@ function toggleImgFree() {
   function cancelNodeEdit() {
     var ta = $('mapInlineEdit');
     if (ta.hidden) return;
+    if (S.editingEdge) {           // the words are only written down on commit
+      S.editingEdge = null;
+      ta.hidden = true;
+      focusMap();
+      return;
+    }
     if (S.editingNode) {
       S.editingNode.text = S.editingWas || '';
       S.map._layout();
@@ -3572,25 +3631,61 @@ function toggleImgFree() {
     });
   }
 
+  /* Which branch the Layout picker is talking about: the selected node, if
+     it is one node and has something under it. Otherwise nothing, and the
+     picker means the whole map -- which is what it always meant. */
+  function layoutBranch() {
+    if (!S.map || S.map.selection.length !== 1) return null;
+    var node = S.map.selected;
+    if (!node || !S.map.descendantsOf(node).length) return null;
+    return node;
+  }
+
   function renderLayouts() {
     var sel = $('mapLayout');
-    if (!sel) return;
-    if (!sel.childElementCount) {
-      Object.keys(Mindmap.LAYOUTS).forEach(function (k) {
-        var o = document.createElement('option');
-        o.value = k;
-        o.textContent = Mindmap.LAYOUTS[k];
-        sel.appendChild(o);
-      });
+    if (!sel || !S.map) return;
+    if (!sel.dataset.wired) {
+      sel.dataset.wired = '1';
       sel.onchange = function () {
         commitNodeEdit();            // the edit box cannot follow a node that moves
-        S.map.setLayout(sel.value);
+        var node = layoutBranch();
+        if (node) {
+          var back = sel.value === 'inherit';
+          S.map.setBranchLayout(node, back ? '' : sel.value);
+          toast(back
+            ? 'This branch follows the map again'
+            : 'This branch grows ' + Mindmap.LAYOUTS[sel.value].toLowerCase());
+        } else {
+          S.map.setLayout(sel.value);
+        }
+        S.map.fit();                 // a lot just moved; go and look at it
         $('autoBtn').classList.toggle('on', !!S.map.auto);
-        S.map.fit();
         focusMap();
+        renderLayouts();
       };
     }
-    sel.value = S.map.layout || 'right';
+
+    var branch = layoutBranch();
+    // the way out is only worth offering while a branch is what is being set
+    var keys = (branch ? ['inherit'] : []).concat(Object.keys(Mindmap.LAYOUTS));
+    if (sel.dataset.keys !== keys.join(',')) {
+      sel.innerHTML = '';
+      keys.forEach(function (k) {
+        var o = document.createElement('option');
+        o.value = k;
+        o.textContent = k === 'inherit' ? 'Same as the map' : Mindmap.LAYOUTS[k];
+        sel.appendChild(o);
+      });
+      sel.dataset.keys = keys.join(',');
+    }
+    sel.value = branch
+      ? (S.map.branchLayout(branch) || 'inherit')
+      : (S.map.layout || 'right');
+    sel.title = branch ? 'Which way this branch grows' : 'Which way the map grows';
+
+    var group = sel.closest ? sel.closest('.style-group') : null;
+    var lab = group && group.querySelector('.style-label');
+    if (lab) lab.textContent = branch ? 'This branch' : 'Layout';
   }
 
   function renderEdgeTypes() {
@@ -3667,6 +3762,7 @@ function toggleImgFree() {
 
     renderFoldBtn(one ? node : null);
     renderListBtn(one ? node : null);
+    renderLayouts();                 // it means this branch, or the whole map
     var bb = $('branchBtn');
     if (bb && S.map) bb.classList.toggle('on', !!S.map.branchColors);
 
@@ -3859,6 +3955,16 @@ function toggleImgFree() {
 
   /* What a relationship means, in a word or two. A branch says "this is
      under that"; a relationship has to say what it is for. */
+  /* Just made: put the text box on it rather than a dialog. The label has
+     to be drawn once before there is a box to sit over, so this waits a frame. */
+  function labelRelationNow() {
+    var edge = S.map && S.map.selectedEdge;
+    if (!edge || !edge.rel) return;
+    requestAnimationFrame(function () {
+      if (S.map && S.map.selectedEdge === edge) startEdgeLabelEdit(edge);
+    });
+  }
+
   function labelRelationDialog() {
     var edge = S.map && S.map.selectedEdge;
     if (!edge || !edge.rel) return;
@@ -4112,9 +4218,10 @@ function toggleImgFree() {
             ? 'Link mode: tap one node, then another. Tap a link to remove it. Esc to exit.'
             : mapHintText();
         },
+        onEdgeRename: function (edge) { startEdgeLabelEdit(edge); },
         onLinkStep: function (result) {
           if (result === 'started') toast('Now tap the node to relate it to');
-          else if (result === 'related') labelRelationDialog();
+          else if (result === 'related') labelRelationNow();
           else if (result === 'unlinked') toast('Link removed');
           else if (result === 'cancelled') toast('Link cancelled');
         },
