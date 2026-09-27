@@ -127,6 +127,7 @@
       <div class="menu node-menu" id="nodeMenu" hidden>
         <button data-act="map-rename"><b>Edit text</b></button>
         <button data-act="map-child"><b>Add child</b></button>
+        <button data-act="map-checklist"><b>Tick list</b></button>
         <button data-act="map-copy"><b>Copy</b></button>
         <button data-act="map-paste"><b>Paste</b></button>
         <button data-act="map-duplicate"><b>Duplicate</b></button>
@@ -233,12 +234,12 @@
             <button class="ghost-btn" data-act="map-copy">Copy <kbd>Ctrl+C</kbd></button>
             <button class="ghost-btn" data-act="map-paste">Paste <kbd>Ctrl+V</kbd></button>
             <button class="ghost-btn" data-act="map-duplicate">Duplicate <kbd>Ctrl+D</kbd></button>
-            <button class="ghost-btn" data-act="map-unlink">Unlink</button>
             <button class="ghost-btn" data-act="map-del">Delete <kbd>Del</kbd></button>
             <button class="ghost-btn" data-act="map-zoom-out">&#8722;</button>
             <button class="ghost-btn" data-act="map-zoom-in">&#43;</button>
             <button class="ghost-btn" data-act="map-fit">Fit</button>
             <button class="ghost-btn" data-act="map-auto" id="autoBtn">Auto-arrange</button>
+            <button class="ghost-btn" data-act="map-checklist">Tick list</button>
             <button class="ghost-btn" data-act="map-find">Find <kbd>Ctrl+F</kbd></button>
             <button class="ghost-btn" data-act="map-present">Present</button>
             <button class="ghost-btn" data-act="map-style-toggle" id="styleBtn">Style</button>
@@ -262,6 +263,8 @@
               <button class="chip" data-act="map-font-smaller" title="Smaller text">A&#8722;</button>
               <span class="chip-val" id="mapFontVal">–</span>
               <button class="chip" data-act="map-font-bigger" title="Bigger text">A&#43;</button>
+              <input type="range" id="mapFontRange" class="style-range" min="8" max="40" step="1"
+                title="Size of the text in the selected nodes">
               <button class="chip" data-act="map-font-reset" title="Back to the app text size">Reset</button>
             </div>
             <div class="style-group">
@@ -290,15 +293,25 @@
             <canvas id="mapCanvas"></canvas>
             <textarea id="mapInlineEdit" class="map-inline" spellcheck="false" hidden></textarea>
             <!-- the everyday buttons, where a thumb can reach them -->
-            <div class="map-zoom" id="mapZoom" aria-hidden="true">100%</div>
+            <button class="map-zoom" id="mapZoom" data-act="map-zoom-step"
+              title="Tap for 50%, 100%, 200%">100%</button>
+            <button class="map-pages" id="mapPages" data-act="pages"
+              title="Pages in this mindmap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l8.5 4.2-8.5 4.2-8.5-4.2z"/><path d="M3.5 12.2l8.5 4.2 8.5-4.2"/><path d="M3.5 16.4l8.5 4.2 8.5-4.2"/></svg>
+            </button>
             <div class="map-quick" id="mapQuick">
               <button class="quick-btn" data-act="map-child">Child</button>
               <button class="quick-btn" data-act="map-sibling">Sibling</button>
               <button class="quick-btn" data-act="map-rename">Edit</button>
               <button class="quick-btn" data-act="map-fold">Fold</button>
+              <button class="quick-btn" data-act="map-checklist">Tick list</button>
               <button class="quick-btn" data-act="map-style-toggle">Colour</button>
               <button class="quick-btn" data-act="map-image">Picture</button>
               <button class="quick-btn" data-act="map-image-remove" hidden>Remove picture</button>
+              <button class="quick-btn" data-act="map-pic-change" hidden>Change picture</button>
+              <button class="quick-btn" data-act="map-pic-smaller" hidden>Smaller picture</button>
+              <button class="quick-btn" data-act="map-pic-bigger" hidden>Bigger picture</button>
+              <button class="quick-btn" data-act="map-pic-reset" hidden>Picture back to normal</button>
               <button class="quick-btn" data-act="map-link">Link</button>
               <button class="quick-btn" data-act="map-duplicate">Duplicate</button>
               <button class="quick-btn danger" data-act="map-del">Delete</button>

@@ -86,7 +86,9 @@
       (n.images || []).forEach(function (id) { if (ids.indexOf(id) === -1) ids.push(id); });
       var nodes = (n.map && n.map.nodes) || [];
       nodes.forEach(function (nd) {
-        if (nd.image && ids.indexOf(nd.image) === -1) ids.push(nd.image);
+        // a node can hold several pictures now; `image` is only the first
+        (nd.pics && nd.pics.length ? nd.pics : (nd.image ? [nd.image] : []))
+          .forEach(function (pid) { if (ids.indexOf(pid) === -1) ids.push(pid); });
       });
     });
     return Promise.all(ids.map(function (id) {
@@ -609,6 +611,8 @@
       return Promise.reject(new Error('This browser cannot link a file.'));
     }
     return global.showSaveFilePicker({
+      id: 'sulat-backup',
+      startIn: 'documents',
       suggestedName: suggested || 'sulat-backup.json.gz',
       types: [{ description: 'Sulat backup', accept: { 'application/json': ['.json', '.gz', '.sulat'] } }]
     }).then(function (handle) { _linked = handle; return handle.name; });
@@ -618,14 +622,130 @@
   function unlinkBackupFile() { _linked = null; }
 
   function writeOut(name, blob, opts) {
-    if (!(opts && opts.toLinked && _linked)) {
-      download(name, blob);
-      return Promise.resolve(false);
+    opts = opts || {};
+
+    function viaLinked() {
+      if (!(opts.toLinked && _linked)) {
+        download(name, blob);
+        return Promise.resolve(false);
+      }
+      return _linked.createWritable().then(function (w) {
+        return w.write(blob).then(function () { return w.close(); });
+      }).then(function () { return true; })
+        .catch(function () { download(name, blob); return false; });
     }
-    return _linked.createWritable().then(function (w) {
-      return w.write(blob).then(function () { return w.close(); });
-    }).then(function () { return true; })
-      .catch(function () { download(name, blob); return false; });
+
+    if (!_folder) return viaLinked();
+    return folderReady(true).then(function (ok) {
+      if (!ok) return viaLinked();
+      return writeToFolder(name, blob).catch(viaLinked);
+    });
+  }
+
+
+  /* ---------- a folder of backups, three deep ----------
+     A download goes where the browser sends it, which is Downloads, and it
+     goes there again every time: a month of automatic backups is a month of
+     dated files nobody asked for and nobody deletes. Pointing this at a
+     folder instead -- Documents is where the picker opens -- means the app
+     can tidy up after itself, and three is enough to get out of trouble
+     without a drawer full of them.
+
+     The folder is remembered between sessions. Chrome still wants the person
+     to say yes again after a restart, so the first backup of a session asks;
+     if it is refused, or the browser has no folder picker, this falls back to
+     the linked file and then to a download, and a backup is never lost. */
+  var KEEP_FILES = 3;
+  var FOLDER_KEY = 'backupFolder';
+  var _folder = null;                       // FileSystemDirectoryHandle
+
+  function hasFolderPicker() { return typeof global.showDirectoryPicker === 'function'; }
+
+  function isBackupFile(name) {
+    if (name.indexOf('sulat-backup') !== 0) return false;
+    return /\.(json|json\.gz|gz|sulat)$/i.test(name);
+  }
+
+  function rememberFolder(handle) {
+    _folder = handle;
+    if (!handle || DB.isFallback()) return Promise.resolve();
+    return DB.put('meta', { key: FOLDER_KEY, handle: handle })
+      .catch(function () { /* some browsers will not store a handle; fine */ });
+  }
+
+  function linkBackupFolder() {
+    if (!hasFolderPicker()) {
+      return Promise.reject(new Error('This browser cannot save into a folder you pick.'));
+    }
+    return global.showDirectoryPicker({
+      id: 'sulat-backups',
+      mode: 'readwrite',
+      startIn: 'documents'
+    }).then(function (handle) {
+      return rememberFolder(handle).then(function () { return handle.name; });
+    });
+  }
+
+  function folderName() { return _folder ? _folder.name : null; }
+
+  function unlinkBackupFolder() {
+    _folder = null;
+    if (DB.isFallback()) return Promise.resolve();
+    return DB.del('meta', FOLDER_KEY).catch(function () { });
+  }
+
+  /* Pick the folder up again on the next run. The handle is kept whatever the
+     permission says -- asking needs a click, so that waits until there is one. */
+  function restoreBackupFolder() {
+    if (DB.isFallback() || !hasFolderPicker()) return Promise.resolve(null);
+    return DB.get('meta', FOLDER_KEY).then(function (row) {
+      if (!row || !row.handle) return null;
+      _folder = row.handle;
+      return _folder.name;
+    }).catch(function () { return null; });
+  }
+
+  // `ask` is true only where a click is behind the call
+  function folderReady(ask) {
+    if (!_folder || !_folder.queryPermission) return Promise.resolve(!!_folder);
+    return _folder.queryPermission({ mode: 'readwrite' }).then(function (p) {
+      if (p === 'granted') return true;
+      if (!ask || !_folder.requestPermission) return false;
+      return _folder.requestPermission({ mode: 'readwrite' })
+        .then(function (r) { return r === 'granted'; });
+    }).catch(function () { return false; });
+  }
+
+  /* Newest three stay; the rest go. Names carry a sortable date stamp, so the
+     order of the names is the order they were written. */
+  function pruneBackupFolder() {
+    if (!_folder || !_folder.values) return Promise.resolve(0);
+    var names = [];
+    var walk = _folder.values();
+    function step() {
+      return walk.next().then(function (r) {
+        if (r.done) return null;
+        if (r.value.kind === 'file' && isBackupFile(r.value.name)) names.push(r.value.name);
+        return step();
+      });
+    }
+    return step().then(function () {
+      names.sort();                                  // oldest stamp first
+      var doomed = names.slice(0, Math.max(0, names.length - KEEP_FILES));
+      return Promise.all(doomed.map(function (nm) {
+        return _folder.removeEntry(nm).catch(function () { });
+      })).then(function () { return doomed.length; });
+    }).catch(function () { return 0; });
+  }
+
+  function writeToFolder(name, blob) {
+    return _folder.getFileHandle(name, { create: true })
+      .then(function (fh) { return fh.createWritable(); })
+      .then(function (w) {
+        return w.write(blob).then(function () { return w.close(); });
+      })
+      .then(pruneBackupFolder)
+      .then(function () { return true; });
   }
 
   /* ---------- daily snapshots kept on the device ----------
@@ -1019,6 +1139,14 @@
     snapshotBlob: snapshotBlob,
     importBundle: importBundle,
     linkBackupFile: linkBackupFile,
+    linkBackupFolder: linkBackupFolder,
+    reconnectFolder: function () { return folderReady(true); },
+    unlinkBackupFolder: unlinkBackupFolder,
+    restoreBackupFolder: restoreBackupFolder,
+    pruneBackupFolder: pruneBackupFolder,
+    folderName: folderName,
+    hasFolderPicker: hasFolderPicker,
+    keepFiles: function () { return KEEP_FILES; },
     linkedName: linkedName,
     unlinkBackupFile: unlinkBackupFile,
     hasFilePicker: hasFilePicker,

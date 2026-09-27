@@ -12,7 +12,7 @@
 (function (global) {
   'use strict';
 
-  var LIMIT = 150;
+  var LIMIT = 150;                 // how many steps back are kept
 
   var undoStack = [];
   var redoStack = [];
@@ -108,8 +108,20 @@
     notify();
   }
 
+  function setLimit(n) {
+    n = parseInt(n, 10);
+    if (!(n > 0)) return LIMIT;
+    LIMIT = Math.max(10, Math.min(500, n));
+    while (undoStack.length > LIMIT) undoStack.shift();
+    return LIMIT;
+  }
+
+  function limit() { return LIMIT; }
+
   global.History = {
     configure: configure,
+    setLimit: setLimit,
+    limit: limit,
     rec: rec,
     clone: clone,
     push: push,

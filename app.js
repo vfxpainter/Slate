@@ -51,9 +51,12 @@
     autoBackup: false,
     autoGap: '1h',        // one of AUTO_GAPS
     autoKeep: 30,         // how many snapshots to hold on to
+    askOnExit: true,      // a word before closing with work still unwritten
+    undoLevels: 150,      // how many steps back to keep
     autoEncrypt: false,   // automatic backups carry the same password
     backupPassword: '',   // this session only; never written to disk
     lastAutoBackup: 0,
+    changedSinceBackup: false,   // work done that no backup has caught yet
     paneW: { nav: 0, list: 0 },   // 0 = let the stylesheet decide
     imgURL: {},           // imageId -> object URL
     saveTimer: null,
@@ -261,6 +264,11 @@
     if (ag) S.autoGap = ag;
     var ak = parseInt(localStorage.getItem('sulat-autokeep'), 10);
     if (ak > 0) S.autoKeep = ak;
+    var ax = localStorage.getItem('sulat-askexit');
+    if (ax !== null) S.askOnExit = ax === '1';
+    var ul = parseInt(localStorage.getItem('sulat-undolevels'), 10);
+    if (ul > 0) S.undoLevels = ul;
+    if (window.History && History.setLimit) S.undoLevels = History.setLimit(S.undoLevels);
     if (window.Exporter) Exporter.setSnapshotLimit(S.autoKeep);
     S.autoEncrypt = localStorage.getItem('sulat-autoencrypt') === '1';
     var ac = localStorage.getItem('slate-autocaps');
@@ -705,6 +713,7 @@
     var before = refs.map(function (r) { return History.rec(r.store, r.id, current(r.store, r.id)); });
     var result = mutate();
     clearFolderCache();      // a note may have moved, emptied or filled a folder
+    markChanged();
     var after = refs.map(function (r) { return History.rec(r.store, r.id, current(r.store, r.id)); });
     History.push(label, before, after);
     return writeAll(refs).then(function () { return result; });
@@ -906,11 +915,31 @@
 
   /* ================= saving ================= */
 
+  /* Something has been changed that a backup has not seen. Written down so
+     that closing the app can say so -- and left alone when the backup is
+     automatic, because then nothing is waiting on you. */
+  function markChanged() {
+    if (S.changedSinceBackup) return;
+    S.changedSinceBackup = true;
+  }
+
+  function workIsUnsaved() {
+    return !!S.changedSinceBackup && !S.autoBackup;
+  }
+
+  /* Queue the write, and remember that something is now waiting on it. Every
+     path that changes anything comes through here; setting the timer by hand
+     is how mindmap edits used to slip past unnoticed. */
+  function scheduleSave() {
+    markChanged();
+    clearTimeout(S.saveTimer);
+    S.saveTimer = setTimeout(flush, SAVE_DELAY);
+  }
+
   function touch() {
     if (!S.note) return;
     S.note.updatedAt = Date.now();
-    clearTimeout(S.saveTimer);
-    S.saveTimer = setTimeout(flush, SAVE_DELAY);
+    scheduleSave();
   }
 
   function flush() {
@@ -1364,7 +1393,8 @@
   function syncTabToView() {
     var f = folderById(S.view);
     if (f && f.kind) S.tab = f.kind;
-    else if (S.view === 'pinned' || S.view === 'trash' || S.view.indexOf('tag:') === 0) S.tab = 'more';
+    else if (S.view === 'pinned' || S.view === 'trash' || S.view === 'settings' ||
+             S.view.indexOf('tag:') === 0) S.tab = 'more';
     else if (!f) S.view = S.tab === 'more' ? 'more' : 'all';
   }
 
@@ -1450,10 +1480,96 @@
       page.appendChild(el('div', 'more-head', 'Tags'));
       tags.forEach(function (t) { row('#' + t.name, t.count, 'view', 'tag:' + t.name); });
     }
-    page.appendChild(el('div', 'more-head', 'Settings'));
-    row('Backup & transfer', null, 'act', 'open-transfer');
-    row('Text & font', null, 'act', 'open-fonts');
-    row('Theme', null, 'act', 'toggle-theme');
+    page.appendChild(el('div', 'more-head', 'The app'));
+    row('Settings', null, 'view', 'settings');
+    wrap.appendChild(page);
+  }
+
+  /* ---------- settings ----------
+     One page, in sections, reached from More. Everything that is a choice
+     about how the app behaves belongs here -- including backups, which used
+     to be the place all the other settings ended up for want of anywhere
+     better. */
+  function renderSettingsPage(wrap) {
+    var page = el('div', 'more-page');
+
+    function head(text) { page.appendChild(el('div', 'more-head', text)); }
+    function row(label, note, act) {
+      var b = el('button', 'more-row');
+      b.dataset.act = act;
+      var box = el('span', 'mr-label', label);
+      b.appendChild(box);
+      if (note) b.appendChild(el('span', 'mr-note', note));
+      page.appendChild(b);
+      return b;
+    }
+    function check(label, note, on, run) {
+      var b = el('button', 'more-row');
+      b.appendChild(el('span', 'mr-label', label));
+      if (note) b.appendChild(el('span', 'mr-note', note));
+      var mark = el('span', 'mr-check' + (on ? ' on' : ''), on ? '\u2713' : '');
+      b.appendChild(mark);
+      b.onclick = function () {
+        var now = run();
+        mark.className = 'mr-check' + (now ? ' on' : '');
+        mark.textContent = now ? '\u2713' : '';
+      };
+      page.appendChild(b);
+      return b;
+    }
+    function choose(label, note, values, current, run) {
+      var wrapRow = el('div', 'more-row static');
+      wrapRow.appendChild(el('span', 'mr-label', label));
+      if (note) wrapRow.appendChild(el('span', 'mr-note', note));
+      var sel = document.createElement('select');
+      sel.className = 'sort-select';
+      values.forEach(function (v) {
+        var o = document.createElement('option');
+        o.value = String(v);
+        o.textContent = String(v);
+        if (String(v) === String(current)) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = function () { run(sel.value); };
+      wrapRow.appendChild(sel);
+      page.appendChild(wrapRow);
+    }
+
+    head('Saving');
+    check('Back up automatically', 'No questions asked when you close',
+      S.autoBackup, function () {
+        S.autoBackup = !S.autoBackup;
+        try { localStorage.setItem('sulat-autobackup', S.autoBackup ? '1' : '0'); }
+        catch (e) { /* private mode */ }
+        if (S.autoBackup) scheduleAutoBackup();
+        return S.autoBackup;
+      });
+    check('Ask before closing', 'Only when something has not been backed up',
+      S.askOnExit, function () {
+        S.askOnExit = !S.askOnExit;
+        try { localStorage.setItem('sulat-askexit', S.askOnExit ? '1' : '0'); }
+        catch (e) { /* private mode */ }
+        return S.askOnExit;
+      });
+    choose('Steps you can undo', '', [30, 60, 150, 300, 500], S.undoLevels, function (v) {
+      S.undoLevels = History.setLimit(v);
+      try { localStorage.setItem('sulat-undolevels', String(S.undoLevels)); }
+      catch (e) { /* private mode */ }
+      renderUndoButtons();
+      toast(S.undoLevels + ' steps kept');
+    });
+    row('Backup & transfer', 'Export, import, merge, snapshots', 'open-transfer');
+
+    head('Reading and writing');
+    row('Text & font', 'Size, typeface, line width', 'open-fonts');
+    row('Theme', document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'Dark' : 'Light', 'toggle-theme');
+
+    head('Housekeeping');
+    row('Duplicate notes', 'Removes exact copies, asks about the rest', 'dupnotes');
+    row('Merge duplicate folders', 'Fixes a folder showing up twice', 'dupfolders');
+    row('Reload the app files', 'If the app looks out of date', 'refresh');
+
     var st = el('div', 'more-foot', $('storageLine').textContent || '');
     page.appendChild(st);
     var build = el('div', 'more-foot', 'Checking which build is running\u2026');
@@ -1470,6 +1586,7 @@
     }
     wrap.appendChild(page);
   }
+
 
   function renderTabsList() {
     renderTabBar();
@@ -1509,6 +1626,11 @@
     wrap.innerHTML = '';
     if (S.tab === 'more' && S.view === 'more' && !S.q) {
       renderMorePage(wrap);
+      saveTabState();
+      return;
+    }
+    if (S.tab === 'more' && S.view === 'settings' && !S.q) {
+      renderSettingsPage(wrap);
       saveTabState();
       return;
     }
@@ -1805,6 +1927,18 @@
         // On a mindmap an image belongs to a node, not to a strip above the
         // canvas: the first goes on the selected node, the rest become nodes.
         if (note.type === 'mindmap' && S.map && S.mapNoteId === note.id) {
+          if (S.swapPic) {
+            S.swapPic = false;
+            if (S.map.replacePic(recs[0].id)) {
+              // anything else picked at the same time still joins the node
+              recs.slice(1).forEach(function (r) { S.map.attachImage(r.id, S.map.selected); });
+              renderMapTools(S.map.selected);
+              renderList();
+              renderUndoButtons();
+              toast('Picture changed — Ctrl+Z to undo');
+              return;
+            }
+          }
           recs.forEach(function (r, i) {
             S.map.attachImage(r.id, i === 0 ? S.map.selected : null);
           });
@@ -3508,9 +3642,17 @@ function toggleImgFree() {
     });
     $('mapColors').classList.toggle('dimmed', !any);
 
+    var chosen = S.map && S.map.selectedPic;
+    ['map-pic-bigger', 'map-pic-smaller', 'map-pic-reset', 'map-pic-change'].forEach(function (a) {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-act="' + a + '"]'),
+        function (b) { b.hidden = !chosen; });
+    });
+
+    var pics = (one && node && S.map) ? S.map.picCount(node) : 0;
     Array.prototype.forEach.call(
       document.querySelectorAll('[data-act="map-image-remove"]'), function (rm) {
-        rm.hidden = !(one && node && node.image);
+        rm.hidden = !pics;
+        rm.title = pics > 1 ? 'Remove the last of ' + pics + ' pictures' : 'Remove the picture';
       });
 
     Array.prototype.forEach.call($('mapColors').children, function (b) {
@@ -3524,6 +3666,7 @@ function toggleImgFree() {
     }
 
     renderFoldBtn(one ? node : null);
+    renderListBtn(one ? node : null);
     var bb = $('branchBtn');
     if (bb && S.map) bb.classList.toggle('on', !!S.map.branchColors);
 
@@ -3532,6 +3675,26 @@ function toggleImgFree() {
     Array.prototype.forEach.call($('mapShapes').children, function (b) {
       b.classList.toggle('on', one && (node.shape || 'round') === b.dataset.shape);
     });
+
+    var range = $('mapFontRange');
+    if (range && S.map) {
+      range.disabled = !any;
+      if (one && node) range.value = S.map.fontSizeOf(node);
+      if (!range.dataset.wired) {
+        range.dataset.wired = '1';
+        /* Dragging it changes the size as you go; the save waits for the end,
+           so a sweep across the slider is one step to undo, not forty. */
+        range.oninput = function () {
+          if (!S.map.selection.length) return;
+          S.map.selection.forEach(function (nd) { nd.fs = parseInt(range.value, 10) || 0; });
+          S.map._layout();
+          S.map.draw();
+          var fvl = $('mapFontVal');
+          if (fvl) fvl.textContent = range.value;
+        };
+        range.onchange = function () { S.map._changed(); focusMap(); };
+      }
+    }
 
     var fv = $('mapFontVal');
     if (fv) {
@@ -3573,8 +3736,8 @@ function toggleImgFree() {
      where there is room; on a phone the icons alone make one short row, and
      every button keeps its name as a tooltip and for screen readers. */
   var MAP_ICONS = {
-    'map-sibling': '<rect x="8" y="3" width="13" height="6" rx="1.8"/><rect x="8" y="13" width="13" height="6" rx="1.8"/><path d="M4 6h4M4 16h4M4 6v10"/><path d="M14.5 21.5v-2.5"/>',
-    'map-child': '<rect x="2" y="9" width="8" height="6" rx="1.8"/><rect x="14" y="9" width="8" height="6" rx="1.8"/><path d="M10 12h4"/><path d="M18 6.5v-3M16.5 5h3"/>',
+    'map-sibling': '<rect x="3" y="3" width="11" height="8" rx="2"/><rect x="10" y="13" width="11" height="8" rx="2"/><path d="M15.5 15.5v3M14 17h3"/>',
+    'map-child': '<rect x="2.5" y="3" width="9" height="7" rx="2"/><path d="M7 10v6.5a1.5 1.5 0 0 0 1.5 1.5H12"/><rect x="12.5" y="14" width="9" height="7" rx="2"/><path d="M17 16.5v2M16 17.5h2"/>',
     'map-rename': '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     'map-select-mode': '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2.6"/>',
     'map-link': '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4"/>',
@@ -3583,7 +3746,6 @@ function toggleImgFree() {
     'map-copy': '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
     'map-paste': '<rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3.5h6V5M9 11h6M9 15h4"/>',
     'map-duplicate': '<rect x="3" y="3" width="12" height="12" rx="2"/><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M15 12.5v5M12.5 15h5"/>',
-    'map-unlink': '<path d="M9.5 14.5l-2 2a3.2 3.2 0 0 1-4.5-4.5l2-2"/><path d="M14.5 9.5l2-2a3.2 3.2 0 0 1 4.5 4.5l-2 2"/><path d="M8 3.5v2.5M3.5 8H6M16 20.5V18M20.5 16H18"/>',
     'map-del': '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/>',
     'map-zoom-out': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M8 11h6"/>',
     'map-zoom-in': '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5M8 11h6M11 8v6"/>',
@@ -3591,6 +3753,12 @@ function toggleImgFree() {
     'map-auto': '<rect x="2.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="3.5" width="6" height="4" rx="1"/><rect x="15.5" y="10" width="6" height="4" rx="1"/><rect x="15.5" y="16.5" width="6" height="4" rx="1"/><path d="M8.5 12h7M12 5.5v13M12 5.5h3.5M12 18.5h3.5"/>',
     'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>',
     'map-fold': '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
+    'map-copy-text': '<rect x="8" y="3.5" width="12" height="15" rx="2"/><path d="M16 18.5v1.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 20V8.5A1.5 1.5 0 0 1 5.5 7H8"/><path d="M11.5 8h5M11.5 11.5h5M11.5 15h3"/>',
+    'map-checklist': '<path d="M3.5 6.5l2 2 3.5-3.5"/><path d="M3.5 15.5l2 2 3.5-3.5"/><path d="M12.5 7h8M12.5 16h8"/>',
+    'map-pic-smaller': '<rect x="6" y="7.5" width="12" height="9" rx="1.8"/><path d="M9 12h6"/>',
+    'map-pic-change': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7 15l3-3 2 2 2.5-3 2.5 4"/><path d="M14.5 3.5l2.5 2.5-2.5 2.5"/><path d="M17 6h-4"/>',
+    'map-pic-bigger': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M12 9.5v5M9.5 12h5"/>',
+    'map-pic-reset': '<rect x="4" y="6" width="16" height="12" rx="2"/><path d="M8.5 15.5l3-3 2 2 2-2.5"/>',
     'map-find': '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.6-4.6"/>',
     'map-present': '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M12 16.5v3M8.5 19.5h7"/><path d="M10.5 8.5l4 2-4 2z"/>'
   };
@@ -3611,6 +3779,18 @@ function toggleImgFree() {
 
   /* The fold button follows whatever is selected: there is nothing to fold on
      a node with no children, and once folded the same button opens it again. */
+  /* The tick-list button says whether this branch already is one. */
+  function renderListBtn(node) {
+    var on = !!(node && node.checklist);
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#mapQuick [data-act="map-checklist"]'), function (b) {
+        b.disabled = !(node && S.map && S.map.descendantsOf(node).length);
+        b.classList.toggle('on', on);
+        b.title = b.disabled ? 'Nothing under this one to tick off'
+          : (on ? 'Back to an ordinary branch' : 'Tick off this branch');
+      });
+  }
+
   function renderFoldBtn(node) {
     var b = document.querySelector('#mapQuick [data-act="map-fold"]');
     if (!b || !S.map) return;
@@ -3676,6 +3856,17 @@ function toggleImgFree() {
 
 
   /* ---------- find and replace, inside one map ---------- */
+
+  /* What a relationship means, in a word or two. A branch says "this is
+     under that"; a relationship has to say what it is for. */
+  function labelRelationDialog() {
+    var edge = S.map && S.map.selectedEdge;
+    if (!edge || !edge.rel) return;
+    promptDialog('What does this connection say?', edge.label || '', function (v) {
+      S.map.labelEdge(edge, v);
+      focusMap();
+    });
+  }
 
   function mapFindDialog() {
     if (!S.map) return;
@@ -3823,6 +4014,74 @@ function toggleImgFree() {
     return out;
   }
 
+
+  /* ---------- a mindmap as plain text ----------
+
+     Indented lines, one per node, with a box drawn for anything in a tick
+     list -- the shape every notes app understands. From the node you have
+     selected down, or the whole map if that node is the middle of it. */
+  function mapAsText(from) {
+    var m = S.map;
+    if (!m || !m.nodes.length) return '';
+    var byId = {}, kids = {}, hasParent = {};
+    m.nodes.forEach(function (n) { byId[n.id] = n; });
+    m.edges.forEach(function (e) {
+      if (!byId[e.a] || !byId[e.b]) return;
+      (kids[e.a] = kids[e.a] || []).push(e.b);
+      hasParent[e.b] = true;
+    });
+
+    var lines = [], seen = {};
+    function walk(id, depth) {
+      if (seen[id] || depth > 24) return;
+      seen[id] = true;
+      var n = byId[id];
+      var box = '';
+      var par = null;
+      m.edges.some(function (e) {
+        if (e.b !== id) return false;
+        par = byId[e.a];
+        return true;
+      });
+      if (par && par.checklist) box = n.done ? '[x] ' : '[ ] ';
+      lines.push(new Array(depth + 1).join('  ') + '- ' + box + (n.text || '').trim());
+      (kids[id] || []).forEach(function (c) { walk(c, depth + 1); });
+    }
+
+    if (from) {
+      walk(from.id, 0);
+    } else {
+      m.nodes.forEach(function (n) { if (!hasParent[n.id]) walk(n.id, 0); });
+      m.nodes.forEach(function (n) { if (!seen[n.id]) walk(n.id, 0); });
+    }
+    return lines.join('\n');
+  }
+
+  /* Put text on the clipboard. The modern way needs a secure page and can be
+     refused, so the old way is kept behind it rather than failing silently. */
+  function copyText(text) {
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; },
+        function () { return copyTheOldWay(text); });
+    }
+    return Promise.resolve(copyTheOldWay(text));
+  }
+
+  function copyTheOldWay(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (e) { return false; }
+  }
+
   function mountMap() {
     var canvas = $('mapCanvas');
     wireNodeMenu.once = wireNodeMenu.once || (wireNodeMenu(), true);
@@ -3842,8 +4101,7 @@ function toggleImgFree() {
           var after = [History.rec('notes', S.note.id, S.note)];
           History.push('Edit mindmap', before, after);
           renderUndoButtons();
-          clearTimeout(S.saveTimer);
-          S.saveTimer = setTimeout(flush, SAVE_DELAY);
+          scheduleSave();
         },
         // Edited in place on the canvas -- a modal popping up on every Tab was
         // the single most intrusive thing about building a map.
@@ -3855,13 +4113,16 @@ function toggleImgFree() {
             : mapHintText();
         },
         onLinkStep: function (result) {
-          if (result === 'started') toast('Now tap the node to link to');
-          else if (result === 'linked') toast('Linked');
+          if (result === 'started') toast('Now tap the node to relate it to');
+          else if (result === 'related') labelRelationDialog();
           else if (result === 'unlinked') toast('Link removed');
           else if (result === 'cancelled') toast('Link cancelled');
         },
         onSelect: function (node) { renderMapTools(node); },
         onNodeMenu: function (node, x, y) { showNodeMenu(x, y); },
+        onCut: function (many) { toast(plural(many, 'link') + ' cut — Ctrl+Z to undo'); },
+        onHung: function (many) { toast(plural(many, 'node') + ' moved under it'); },
+        onPicSelect: function () { renderMapTools(S.map.selected); },
         onCam: function (scale) {
           var z = $('mapZoom');
           if (!z) return;
@@ -4356,7 +4617,10 @@ function toggleImgFree() {
   // the pictures used on the page you are on, so they can travel with it
   function currentPageImages(n) {
     var ids = [];
-    ((n.map && n.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+    ((n.map && n.map.nodes) || []).forEach(function (x) {
+      (x.pics && x.pics.length ? x.pics : (x.image ? [x.image] : []))
+        .forEach(function (i) { ids.push(i); });
+    });
     String(n.bodyHtml || '').replace(/data-img="([^"]+)"/g, function (m, id) { ids.push(id); return m; });
     return ids;
   }
@@ -4367,7 +4631,10 @@ function toggleImgFree() {
       var c = p.content;
       if (!c) return;
       (c.imgs || []).forEach(function (id) { ids.push(id); });
-      ((c.map && c.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+      ((c.map && c.map.nodes) || []).forEach(function (x) {
+        (x.pics && x.pics.length ? x.pics : (x.image ? [x.image] : []))
+          .forEach(function (i) { ids.push(i); });
+      });
     });
     return ids;
   }
@@ -5034,6 +5301,7 @@ function toggleImgFree() {
           catch (e) { /* private mode */ }
           Exporter.exportBundle(null, null, { password: pass, toLinked: true })
             .then(function (c) {
+              S.changedSinceBackup = false;     // everything is written out now
               var size = c.bytes ? ' · ' + (c.bytes / 1048576).toFixed(1) + ' MB' : '';
               toast('Backed up ' + plural(c.notes, 'note') + ' and ' +
                     plural(c.images, 'image') + (c.encrypted ? ', encrypted' : '') + size);
@@ -5198,6 +5466,7 @@ function toggleImgFree() {
     })
       .then(function (c) {
         S.lastAutoBackup = Date.now();
+        S.changedSinceBackup = false;
         try { localStorage.setItem('sulat-lastautobackup', String(S.lastAutoBackup)); }
         catch (e) { /* private mode */ }
         console.info('Sulat: automatic backup', c.notes + ' notes',
@@ -5207,6 +5476,12 @@ function toggleImgFree() {
   }
 
   function transferDialog() {
+    /* Opening this is a click, and a click is what the browser wants before it
+       will hand the folder back after a restart. Asking here means the first
+       automatic backup of the session has somewhere to go. */
+    if (Exporter.folderName() && Exporter.reconnectFolder) {
+      Exporter.reconnectFolder().catch(function () { });
+    }
     DB.estimate().then(function (est) {
       var used = est && est.usage ? (est.usage / 1048576).toFixed(1) + ' MB used' : 'size unknown';
       var persisted = navigator.storage && navigator.storage.persisted
@@ -5243,6 +5518,14 @@ function toggleImgFree() {
           '<label class="check"><input type="checkbox" id="autoBk"' +
           (S.autoBackup ? ' checked' : '') + '> Back up automatically</label>' +
           '<p class="auto-note" id="autoLine"></p>' +
+          '<label class="check"><input type="checkbox" id="askExit"' +
+          (S.askOnExit ? ' checked' : '') + '> Ask before closing with work unsaved</label>' +
+          '<label class="fld tight" for="undoLevels">Steps you can undo</label>' +
+          '<select id="undoLevels" class="sort-select wide">' +
+          [30, 60, 150, 300, 500].map(function (n) {
+            return '<option value="' + n + '"' + (n === S.undoLevels ? ' selected' : '') +
+              '>' + n + '</option>';
+          }).join('') + '</select>' +
           '<label class="fld tight" for="autoKeep">How many to keep</label>' +
           '<select id="autoKeep" class="sort-select wide">' +
           [7, 14, 30, 60, 120].map(function (n) {
@@ -5260,15 +5543,26 @@ function toggleImgFree() {
               'the password is needed again after a reload.</p>' +
               '<button class="ghost-btn" data-x="unlock-auto">Enter the backup password</button>'
             : '') +
-          (Exporter.hasFilePicker()
+          (Exporter.hasFolderPicker()
+            ? (Exporter.folderName()
+                ? '<div class="auto-actions">' +
+                  '<button class="ghost-btn" data-x="refolder">Choose a different folder</button>' +
+                  '<button class="ghost-btn" data-x="unfolder">Stop using it</button>' +
+                  '</div>'
+                : '<button class="ghost-btn" data-x="folder">Choose a backup folder</button>')
+            : '') +
+          (Exporter.hasFilePicker() && !Exporter.folderName()
             ? (Exporter.linkedName()
                 ? '<div class="auto-actions">' +
                   '<button class="ghost-btn" data-x="relink">Choose a different file</button>' +
                   '<button class="ghost-btn" data-x="link">Use Downloads instead</button>' +
                   '</div>'
-                : '<button class="ghost-btn" data-x="link">Choose a file to keep updated</button>')
-            : '<p class="auto-note">This browser cannot write to a file you choose, ' +
-              'so automatic backups land in your Downloads folder.</p>') +
+                : '<button class="ghost-btn" data-x="link">Or keep one single file updated</button>')
+            : '') +
+          (!Exporter.hasFilePicker() && !Exporter.hasFolderPicker()
+            ? '<p class="auto-note">This browser cannot write where you choose, ' +
+              'so automatic backups land in your Downloads folder.</p>'
+            : '') +
           '</div>' +
 
           '<details class="more-box"><summary>Other tools</summary>' +
@@ -5302,6 +5596,25 @@ function toggleImgFree() {
                 Exporter.pruneSnapshots().then(function () { describeAuto(); });
               };
             }
+            var askBox = root.querySelector('#askExit');
+            if (askBox) {
+              askBox.onchange = function () {
+                S.askOnExit = askBox.checked;
+                try { localStorage.setItem('sulat-askexit', S.askOnExit ? '1' : '0'); }
+                catch (err) { /* private mode */ }
+              };
+            }
+            var undoSel = root.querySelector('#undoLevels');
+            if (undoSel) {
+              undoSel.onchange = function () {
+                S.undoLevels = History.setLimit(undoSel.value);
+                try { localStorage.setItem('sulat-undolevels', String(S.undoLevels)); }
+                catch (err) { /* private mode */ }
+                renderUndoButtons();
+                toast(S.undoLevels + ' steps kept');
+              };
+            }
+
             var gapSel = root.querySelector('#autoGap');
             if (gapSel) {
               gapSel.onchange = function () {
@@ -5322,12 +5635,16 @@ function toggleImgFree() {
             var autoLine = root.querySelector('#autoLine');
             function describeAuto() {
               if (!autoLine) return;
+              var folder = Exporter.folderName();
               var where = Exporter.linkedName();
               autoLine.textContent = !S.autoBackup
                 ? 'Off. Nothing is written unless you export by hand.'
-                : (where
-                    ? 'Keeps ' + where + ' up to date'
-                    : 'Saves to your Downloads folder') +
+                : (folder
+                    ? 'Saves into ' + folder + ', keeping the newest ' +
+                      Exporter.keepFiles()
+                    : where
+                      ? 'Keeps ' + where + ' up to date'
+                      : 'Saves to your Downloads folder') +
                   ', at most ' + ((AUTO_GAPS.filter(function (g) {
                     return g.id === S.autoGap;
                   })[0] || AUTO_GAPS[3]).label.toLowerCase()) + '.' +
@@ -5365,6 +5682,33 @@ function toggleImgFree() {
               closeDlg();
               window.open('merge.html', '_blank', 'noopener');
             };
+            /* Somewhere the app can tidy up after itself. A download goes
+               to Downloads and stays there for ever; a folder it holds a
+               handle on can have last month's copies taken back out. */
+            function pickFolder() {
+              Exporter.linkBackupFolder().then(function (name) {
+                closeDlg();
+                toast('Backups now go to ' + name +
+                      ' \u2014 the newest ' + Exporter.keepFiles() + ' are kept');
+              }).catch(function (e) {
+                if (e && e.name === 'AbortError') return;   // they changed their mind
+                toast('Could not use that folder: ' + e.message);
+              });
+            }
+            var folderBtn = root.querySelector('[data-x="folder"]');
+            if (folderBtn) folderBtn.onclick = pickFolder;
+            var refolderBtn = root.querySelector('[data-x="refolder"]');
+            if (refolderBtn) refolderBtn.onclick = pickFolder;
+            var unfolderBtn = root.querySelector('[data-x="unfolder"]');
+            if (unfolderBtn) {
+              unfolderBtn.onclick = function () {
+                Exporter.unlinkBackupFolder().then(function () {
+                  closeDlg();
+                  toast('Backups go to your Downloads folder again.');
+                });
+              };
+            }
+
             var relinkBtn = root.querySelector('[data-x="relink"]');
             if (relinkBtn) {
               relinkBtn.onclick = function () {
@@ -5472,25 +5816,8 @@ function toggleImgFree() {
             })();
 
             root.querySelector('[data-x="refresh"]').onclick = function () {
-              confirmDialog('Reload the app files?',
-                'This clears the offline copy of the app and fetches it again. ' +
-                'Your notes are stored separately and are not affected.',
-                'Reload', function () {
-                  var jobs = [];
-                  if ('serviceWorker' in navigator) {
-                    jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
-                      return Promise.all(regs.map(function (r) { return r.unregister(); }));
-                    }));
-                  }
-                  if (window.caches) {
-                    jobs.push(caches.keys().then(function (keys) {
-                      return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-                    }));
-                  }
-                  Promise.all(jobs)
-                    .catch(function (e) { console.warn('Sulat: cache clear —', e.message); })
-                    .then(function () { location.reload(); });
-                });
+              closeDlg();
+              reloadAppFiles();
             };
             root.querySelector('[data-x="persist"]').onclick = function () {
               if (!navigator.storage || !navigator.storage.persist) {
@@ -5506,6 +5833,33 @@ function toggleImgFree() {
         );
       });
     });
+  }
+
+
+  /* The service worker serves the app from a cache so it opens offline. If
+     that cache ever sticks on an old build, this clears it and fetches the
+     app again. It touches only the cached copies of the app's own files --
+     the notes live in a database and are not affected. */
+  function reloadAppFiles() {
+    confirmDialog('Reload the app files?',
+      'This clears the offline copy of the app and fetches it again. ' +
+      'Your notes are stored separately and are not affected.',
+      'Reload', function () {
+        var jobs = [];
+        if ('serviceWorker' in navigator) {
+          jobs.push(navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          }));
+        }
+        if (window.caches) {
+          jobs.push(caches.keys().then(function (keys) {
+            return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+          }));
+        }
+        Promise.all(jobs)
+          .catch(function (e) { console.warn('Sulat: cache clear —', e.message); })
+          .then(function () { location.reload(); });
+      });
   }
 
   /* ================= actions ================= */
@@ -6022,10 +6376,17 @@ function toggleImgFree() {
       $('styleBtn').classList.toggle('on', !hidden);
       focusMap();
     },
+    /* Copy does both jobs at once: the words go on the clipboard for
+       everything outside the app, and the branch is held here so pasting back
+       into the map rebuilds it with its children, pictures and ticks. */
     'map-copy': function () {
       if (!S.map) return;
       var n = S.map.copySelection();
-      toast(n ? 'Copied ' + plural(n, 'node') : 'Select some nodes first.');
+      if (!n) { toast('Select some nodes first.'); return; }
+      var from = S.map.selected;
+      copyText(mapAsText(from && S.map.parentOf(from) ? from : null));
+      toast('Copied ' + plural(n, 'node') + ' — and the words, for anywhere else');
+      focusMap();
     },
     /* Copy and paste in one move. Duplicating is what people actually reach
        for on a selected branch, and making them do it in two steps -- with a
@@ -6050,13 +6411,6 @@ function toggleImgFree() {
     },
     'map-space-less': function () { nudgeMapSpacing(-8); },
     'map-space-more': function () { nudgeMapSpacing(8); },
-    'map-unlink': function () {
-      var n = S.map.unlinkSelected();
-      if (!n) toast('Pick a link, or two or more nodes, first.');
-      else toast(n === 1 ? 'Link removed' : n + ' links removed');
-      renderMapTools(S.map.selected);
-      focusMap();
-    },
     'map-tone-down': function () {
       if (!S.map.adjustSaturation(-0.08)) toast('Select a node first.');
       renderMapTools(S.map.selected);
@@ -6072,17 +6426,35 @@ function toggleImgFree() {
     },
     'map-image': function () {
       if (!S.note || S.note.type !== 'mindmap') return;
+      S.swapPic = false;
       if (!S.map.selected) toast('Adding the image as a new node');
       $('filePick').click();
     },
     'map-image-remove': function () {
-      if (S.map.detachImage()) {
+      // the count of what is left, which is 0 when the last one goes -- so
+      // the test is "did it remove anything", not "is anything left"
+      var left = S.map.detachImage();
+      if (left !== false) {
         renderMapTools(S.map.selected);
-        toast('Image removed — Ctrl+Z to undo');
+        toast('Picture removed' + (left ? ', ' + left + ' still there' : '') +
+              ' — Ctrl+Z to undo');
       }
       focusMap();
     },
     'map-fit': function () { S.map.fit(); focusMap(); },
+    /* The zoom reading is also the zoom control: tap it for half size, life
+       size, double. Three stops covers what anyone actually reaches for, and
+       it costs no room on screen. */
+    'map-zoom-step': function () {
+      var stops = [0.5, 1, 2];
+      var now = S.map.cam.s, next = stops[0];
+      for (var i = 0; i < stops.length; i++) {
+        if (now < stops[i] - 0.01) { next = stops[i]; break; }
+        next = stops[(i + 1) % stops.length];
+      }
+      S.map.zoomTo(next);
+      focusMap();
+    },
     'map-fold': function () {
       if (!S.map || !S.map.selected) return;
       if (!S.map.toggleCollapse(S.map.selected)) {
@@ -6097,6 +6469,49 @@ function toggleImgFree() {
       $('branchBtn').classList.toggle('on', S.map.branchColors);
       S.map._changed();
       toast(S.map.branchColors ? 'A colour for each branch' : 'One colour for every line');
+      focusMap();
+    },
+    /* Swap this picture for another. The picker is shared with adding one,
+       so a flag says which of the two is being asked for. */
+    'map-pic-change': function () {
+      if (!S.map || !S.map.selectedPic) { toast('Tap a picture in the node first.'); return; }
+      S.swapPic = true;
+      $('filePick').click();
+    },
+    'map-pic-bigger': function () {
+      if (!S.map.scalePic(0.25)) toast('Tap a picture in the node first.');
+      focusMap();
+    },
+    'map-pic-smaller': function () {
+      if (!S.map.scalePic(-0.25)) toast('Tap a picture in the node first.');
+      focusMap();
+    },
+    'map-pic-reset': function () {
+      if (S.map.resetPic()) toast('Picture back to its share of the box');
+      focusMap();
+    },
+    /* Everything under the node you are on, as indented text. With the
+       middle of the map selected that is the lot, which is what you want when
+       taking a map into something else. */
+    'map-copy-text': function () {
+      var from = S.map && S.map.selected;
+      var whole = !from || !S.map.parentOf(from);
+      var text = mapAsText(whole ? null : from);
+      if (!text) { toast('Nothing to copy.'); return; }
+      copyText(text).then(function (ok) {
+        toast(ok ? (whole ? 'Whole map copied' : 'That branch copied')
+                 : 'Could not reach the clipboard');
+      });
+      focusMap();
+    },
+    'map-checklist': function () {
+      if (!S.map || !S.map.selected) { toast('Select a node first.'); return; }
+      var many = S.map.toggleChecklistBranch(S.map.selected);
+      if (!many) { toast('Nothing under that one to tick off'); return; }
+      toast(S.map.selected.checklist
+        ? plural(many, 'node') + ' can be ticked off now'
+        : 'Back to an ordinary branch');
+      renderMapTools(S.map.selected);
       focusMap();
     },
     'map-find': function () { mapFindDialog(); },
@@ -6128,6 +6543,10 @@ function toggleImgFree() {
 
     'open-transfer': function () { transferDialog(); },
     'open-fonts': function () { fontDialog(); },
+    // the housekeeping jobs, reachable from Settings as well as from the dialog
+    'dupnotes': function () { duplicatesDialog(); },
+    'dupfolders': function () { mergeDuplicateFolders(); },
+    'refresh': function () { reloadAppFiles(); },
     'toggle-theme': function () {
       var cur = document.documentElement.dataset.theme;
       var next = cur === 'dark' ? 'light' : 'dark';
@@ -7018,8 +7437,10 @@ function toggleImgFree() {
       }
       if (mod && !e.shiftKey && (e.key === 'c' || e.key === 'C') &&
           S.map && !$('mapEditor').hidden && !typing) {
-        var copied = S.map.copySelection();
-        if (copied) { e.preventDefault(); toast('Copied ' + plural(copied, 'node')); }
+        if (S.map.selection.length || S.map.selected) {
+          e.preventDefault();
+          ACTIONS['map-copy']();
+        }
         return;
       }
       if (mod && !e.shiftKey && (e.key === 'v' || e.key === 'V') &&
@@ -7113,8 +7534,16 @@ function toggleImgFree() {
     bindRubberBand();
     bindDrawerSwipe();
 
-    window.addEventListener('beforeunload', function () {
-      if (S.saveTimer) flush();
+    /* Anything typed in the last second or two is still on its way to the
+       database. Writing it now covers the ordinary case; the question is only
+       asked if something really is still outstanding, and only if you asked
+       to be asked -- a browser tab that argues about closing is a menace. */
+    window.addEventListener('beforeunload', function (e) {
+      if (S.saveTimer) flush();          // whatever is in flight lands first
+      if (!S.askOnExit || !workIsUnsaved()) return;
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
     });
     document.addEventListener('visibilitychange', function () {
       if (document.hidden && S.saveTimer) flush();
@@ -7231,6 +7660,10 @@ function toggleImgFree() {
 
     bind();
     decorateMapTools();
+    // the backup folder chosen on an earlier run, if it is still there
+    if (Exporter.restoreBackupFolder) {
+      Exporter.restoreBackupFolder().catch(function () { });
+    }
     load()
       .then(firstRun)
       .then(DB.migrateNotes)

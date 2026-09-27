@@ -2696,7 +2696,37 @@ body.dragging-note .note-scroll { touch-action: none; }
   border: 1px solid var(--line);
   font-size: .72rem;
   color: var(--ink-3);
-  pointer-events: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.map-zoom:hover { color: var(--ink); border-color: var(--accent); }
+
+/* the pages button, opposite the zoom reading */
+.map-pages {
+  position: absolute;
+  right: 10px;
+  bottom: 12px;
+  z-index: 6;
+  width: 2.2rem;
+  height: 2.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--pane);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.map-pages:hover { color: var(--ink); border-color: var(--accent); }
+.map-pages svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* the way back, on the notice itself */
@@ -2745,7 +2775,7 @@ body.dragging-note .note-scroll { touch-action: none; }
   /* from just past the zoom reading to the far edge, rather than centred
      over the top of it */
   left: 4.2rem;
-  right: 8px;
+  right: 3.4rem;
   transform: none;
   max-width: none;
   justify-content: flex-start;
@@ -2807,3 +2837,48 @@ body.dragging-note .note-scroll { touch-action: none; }
 }
 .present-btn:hover { background: var(--pane-2); }
 .present-at { color: var(--ink-2); font-size: .88rem; min-width: 3.5rem; text-align: center; }
+
+/* the hint that a picture, not the node, is what the next tap will change */
+#mapQuick .quick-btn[data-act^="map-pic-"] { border-color: var(--accent); }
+
+/* the slider that sets the type size in the chosen nodes */
+.style-range {
+  width: 7.5rem;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+@media (max-width: 720px) { .style-range { width: 5.5rem; } }
+
+/* the settings page: rows that say what they are as well as what they do */
+.more-row.static {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  cursor: default;
+}
+.more-row .mr-note {
+  color: var(--ink-3);
+  font-size: .82rem;
+  margin-left: auto;
+  padding-left: .8rem;
+  text-align: right;
+}
+.more-row.static .mr-note { margin-left: 0; }
+.more-row.static .sort-select { margin-left: auto; }
+.mr-check {
+  margin-left: .6rem;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .8rem;
+  flex: 0 0 auto;
+}
+.mr-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17130e;
+}

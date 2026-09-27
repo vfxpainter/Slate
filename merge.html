@@ -461,7 +461,10 @@ pre.report { white-space: pre-wrap; font-size: .82rem; color: var(--ink-2);
     pm.order.forEach(function (id) {
       var c = pm.byId[id].content || {};
       (c.imgs || []).forEach(function (i) { ids.push(i); });
-      ((c.map && c.map.nodes) || []).forEach(function (x) { if (x.image) ids.push(x.image); });
+      ((c.map && c.map.nodes) || []).forEach(function (x) {
+        (x.pics && x.pics.length ? x.pics : (x.image ? [x.image] : []))
+          .forEach(function (i) { ids.push(i); });
+      });
       String(c.bodyHtml || '').replace(/data-img="([^"]+)"/g, function (m, i) { ids.push(i); return m; });
     });
     return ids;
