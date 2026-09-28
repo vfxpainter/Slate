@@ -31,6 +31,10 @@
   var GAP_Y_DEFAULT = 52;
   var EDGE_HIT = 9;          // px from a curve that still counts as a click
   var DRAG_SLOP = 4;         // px before a press becomes a drag
+  var HOLD_MS = 200;         // and how long it must be held before it will move
+  var MENU_MS = 600;         // a longer hold, let go still, asks for its menu
+  var BOW_CAP = 300;         // how far a relationship may ever bend off its chord
+  var HOLD_SLOP = 12;        // a hand is never perfectly still; this much is fine
   var KISS = 14;             // world px the two boxes must overlap by to join
   var REACH = 95;            // and how far the beam will stretch to find one
   var PULL = 140;            // how much further from its parent before it lets go
@@ -241,6 +245,7 @@
         free: !!n.free,          // put here by hand; auto-arrange leaves it be
         layout: n.layout || null, // this branch grows its own way
         checklist: !!n.checklist, // its children carry boxes to tick
+        tick: !!n.tick,          // and this one carries a box of its own
         done: !!n.done,          // and this one has been ticked
         noteId: n.noteId || null // reserved: the note this node stands for
       };
@@ -304,6 +309,7 @@
         if (n.free) o.free = true;
         if (n.layout && LAYOUTS[n.layout]) o.layout = n.layout;
         if (n.checklist) o.checklist = true;
+        if (n.tick) o.tick = true;
         if (n.done) o.done = true;
         if (n.noteId) o.noteId = n.noteId;
         return o;
@@ -397,6 +403,24 @@
         if (e.label === undefined) e.label = '';
       } else taken[e.b] = true;
     });
+
+    /* Nothing may go on pointing at something that is not there. A node or a
+       link that has been deleted used to stay in these, and the map went on
+       drawing its handles, its halo and its menu -- controls hanging in the
+       air for a box that had gone. */
+    var alive = {};
+    this.nodes.forEach(function (n) { alive[n.id] = n; });
+    function live(n) { return n && alive[n.id] === n ? n : null; }
+    this.selection = this.selection.filter(live);
+    this.selected = live(this.selected);
+    this._hover = live(this._hover);
+    this._lifted = live(this._lifted);
+    if (this.linkFrom) this.linkFrom = live(this.linkFrom);
+    if (this.selectedPic && !alive[this.selectedPic.nodeId]) this.selectedPic = null;
+    if (this.selectedEdge && this.edges.indexOf(this.selectedEdge) === -1) {
+      this.selectedEdge = null;
+    }
+    if (this._drag && !live(this._drag.node)) this._drag = null;
   };
 
   Mindmap.prototype._changed = function () {
@@ -627,13 +651,26 @@
     // the node heading a list belongs to it: a list of jobs where the job
     // itself cannot be marked done is half a list
     if (node.checklist) return true;
+    // and a node can simply be a job on its own, with nothing under it
+    if (node.tick) return true;
     var par = this.parentOf(node);
     return !!(par && par.checklist);
   };
 
   Mindmap.prototype.toggleChecklist = function (node) {
     if (!node) return false;
-    if (!this.descendantsOf(node).length) return false;
+    /* A node at the end of a branch is still a job. It had no way to carry a
+       box before -- the button only worked on something with children, so the
+       last thing in a list, which is usually the thing you actually do, was
+       the one thing you could not tick off. With nothing under it, this makes
+       the node itself a job rather than the head of a list. */
+    if (!this.descendantsOf(node).length) {
+      if (node.tick) { delete node.tick; delete node.done; }
+      else node.tick = true;
+      this._layout();
+      this._changed();
+      return true;
+    }
     node.checklist = !node.checklist;
     if (!node.checklist) {
       // no longer a list, so nothing under it stays ticked
@@ -710,31 +747,6 @@
       if (!b) continue;
       var r = b.s * 0.9;
       if (Math.abs(p.x - b.x) <= r && Math.abs(p.y - b.y) <= r) return n;
-    }
-    return null;
-  };
-
-  // the circle that makes a node's children into a list, opposite the fold one
-  Mindmap.prototype.checkPoint = function (n) {
-    if (!n || !this.descendantsOf(n).length) return null;
-    var f = this.foldPoint(n);
-    if (!f) return null;
-    if (Math.abs(f.y - n.y) > Math.abs(f.x - n.x)) {
-      return { x: n.x, y: n.y - (f.y - n.y) };        // mirrored vertically
-    }
-    return { x: n.x - (f.x - n.x), y: n.y };          // mirrored across
-  };
-
-  Mindmap.prototype.hitCheckToggle = function (px, py) {
-    var p = this.toWorld(px, py);
-    var r = Math.max(7, FOLD_R / this.cam.s);
-    for (var i = this.nodes.length - 1; i >= 0; i--) {
-      var n = this.nodes[i];
-      if (this._hidden && this._hidden[n.id]) continue;
-      if (!this.isSelected(n)) continue;              // only on the node you are on
-      var pt = this.checkPoint(n);
-      if (!pt) continue;
-      if (Math.hypot(p.x - pt.x, p.y - pt.y) <= r * 1.35) return n;
     }
     return null;
   };
@@ -969,6 +981,33 @@
     return { x: from.x + dx * t, y: from.y + dy * t };
   }
 
+  /* Of the two ways a relationship could bow, which one keeps it clearer of
+     the boxes in between. The curve is sampled along its length and the
+     points that land inside a node are counted; fewest wins, and a tie keeps
+     the side it has always used so nothing flickers between the two. */
+  Mindmap.prototype._clearerSide = function (a, b, ux, uy, px, py, len, lift) {
+    var self = this, best = 1, bestHits = Infinity;
+    [1, -1].forEach(function (s) {
+      var c1 = { x: a.x + (ux * 0.22 + px * lift * s) * len,
+                 y: a.y + (uy * 0.22 + py * lift * s) * len };
+      var c2 = { x: a.x + (ux * 0.78 + px * lift * s) * len,
+                 y: a.y + (uy * 0.78 + py * lift * s) * len };
+      var hits = 0;
+      for (var t = 0.12; t <= 0.89; t += 0.11) {
+        var q = bezierAt(t, a, c1, c2, b);
+        for (var i = 0; i < self.nodes.length; i++) {
+          var m = self.nodes[i];
+          if (m === a || m === b) continue;
+          if (self._hidden && self._hidden[m.id]) continue;
+          if (Math.abs(q.x - m.x) <= m.w / 2 + 4 &&
+              Math.abs(q.y - m.y) <= m.h / 2 + 4) { hits++; break; }
+        }
+      }
+      if (hits < bestHits) { bestHits = hits; best = s; }
+    });
+    return best;
+  };
+
   Mindmap.prototype.edgeEnds = function (e) {
     var a = this.byId(e.a), b = this.byId(e.b);
     if (!a || !b) return null;
@@ -976,8 +1015,11 @@
       /* Bowed well clear of the boxes, so a relationship never reads as one
          more branch: it is a remark about two things, not a place in the
          order of them. */
-      var ra = borderPoint(a, b), rb = borderPoint(b, a);
-      var dx = rb.x - ra.x, dy = rb.y - ra.y;
+      /* The frame runs centre to centre, not border to border. The ends are
+         worked out afterwards, from the way the curve actually leaves each
+         node, so the line can come off whichever side of the box it is
+         heading for instead of always off the side facing the other node. */
+      var dx = b.x - a.x, dy = b.y - a.y;
       var len = Math.hypot(dx, dy) || 1;
       var ux = dx / len, uy = dy / len;          // along the line between them
       var px = -uy, py = ux;                     // and square across it
@@ -986,16 +1028,54 @@
          way, a curve you have shaped by hand keeps its shape when either node
          moves, instead of springing back or shearing. An untouched one falls
          back to the arc it has always had. */
-      var lift = Math.min(90, Math.max(34, len * 0.3)) / len;
-      var k1 = e.k1 || { a: 0.25, o: lift };
-      var k2 = e.k2 || { a: 0.75, o: lift };
+      /* The bow flattens as the span grows. It used to be 30% of the distance
+         up to a 90px cap, which is a gentle curve between neighbours and a
+         wild sweep across a wide map: a relationship between two far-apart
+         nodes arced out over everything in between and was impossible to
+         follow. Long links now run nearly straight, with just enough bend to
+         read as a relationship rather than a branch. */
+      var bow = Math.min(52, Math.max(20, len * 0.16));   // px clear of the chord
+      var lift = bow / len;
+      /* A curve shaped by hand is remembered as a FRACTION of the distance
+         between its two nodes, which is right while they stay where they
+         were -- but drag them apart afterwards and that fraction turns into
+         an arc sweeping across the whole map, miles from either end. The
+         bend is capped in real pixels so it can never run away from the
+         nodes it is supposed to join. */
+      function capped(k) {
+        var off = k.o * len;
+        if (Math.abs(off) <= BOW_CAP) return k;
+        return { a: k.a, o: (off > 0 ? BOW_CAP : -BOW_CAP) / len };
+      }
+      /* Which way to bow. Left to itself the curve always swung the same way,
+         and half the time that way was straight over the top of whatever
+         happened to be between the two nodes. Both sides are tried and the
+         emptier one wins -- recomputed only when the nodes have actually
+         moved, since this is asked for every link on every frame. */
+      var side = 1;
+      if (!e.k1 && !e.k2) {
+        var key = Math.round(a.x) + ',' + Math.round(a.y) + ',' +
+                  Math.round(b.x) + ',' + Math.round(b.y) + ',' + this.nodes.length;
+        if (e._sideKey !== key) {
+          e._sideKey = key;
+          e._side = this._clearerSide(a, b, ux, uy, px, py, len, lift);
+        }
+        side = e._side || 1;
+      }
+
+      var k1 = capped(e.k1 || { a: 0.22, o: lift * side });
+      var k2 = capped(e.k2 || { a: 0.78, o: lift * side });
+      var c1 = { x: a.x + (ux * k1.a + px * k1.o) * len,
+                 y: a.y + (uy * k1.a + py * k1.o) * len };
+      var c2 = { x: a.x + (ux * k2.a + px * k2.o) * len,
+                 y: a.y + (uy * k2.a + py * k2.o) * len };
+      /* Each end sits where the curve is actually going, so bending a link
+         walks its origin round the box rather than leaving it pinned to the
+         side facing the other node with the line cutting back across itself. */
+      var ra = borderPoint(a, c1), rb = borderPoint(b, c2);
       return {
-        a: ra, b: rb, rel: true,
-        c1: { x: ra.x + (ux * k1.a + px * k1.o) * len,
-              y: ra.y + (uy * k1.a + py * k1.o) * len },
-        c2: { x: ra.x + (ux * k2.a + px * k2.o) * len,
-              y: ra.y + (uy * k2.a + py * k2.o) * len },
-        frame: { ox: ra.x, oy: ra.y, ux: ux, uy: uy, px: px, py: py, len: len }
+        a: ra, b: rb, rel: true, c1: c1, c2: c2,
+        frame: { ox: a.x, oy: a.y, ux: ux, uy: uy, px: px, py: py, len: len }
       };
     }
     /* In a tidy map every child sits to the right of its parent, so the line
@@ -1117,9 +1197,13 @@
     var f = ends.frame, p = this.toWorld(px, py);
     function frameOf(q) {
       var rx = q.x - f.ox, ry = q.y - f.oy;
+      // the same cap the drawing uses, so the handle never leaves the curve
+      var off = rx * f.px + ry * f.py;
+      if (off > BOW_CAP) off = BOW_CAP;
+      else if (off < -BOW_CAP) off = -BOW_CAP;
       return {
         a: Math.round(((rx * f.ux + ry * f.uy) / f.len) * 10000) / 10000,
-        o: Math.round(((rx * f.px + ry * f.py) / f.len) * 10000) / 10000
+        o: Math.round((off / f.len) * 10000) / 10000
       };
     }
     /* Touch one and both are written down. Leaving the other on the automatic
@@ -1156,7 +1240,23 @@
 
   // where the words sit on screen, for putting a text box over them
   Mindmap.prototype.edgeLabelBox = function (e) {
-    if (!e || !e.rel || !e._label) return null;
+    if (!e || !e.rel) return null;
+    /* Work the box out rather than wait for one. It used to be whatever the
+       last paint happened to leave behind, so a relationship made a moment
+       ago had no box yet and could not be typed into until a frame had gone
+       by -- which is why a new one felt stiff and unready. */
+    if (!e._label) {
+      var ends = this.edgeEnds(e);
+      if (!ends) return null;
+      var mid = bezierAt(0.5, ends.a, ends.c1, ends.c2, ends.b);
+      var words = (e.label || '').trim() || 'relates to';
+      var fs = Math.max(10, Math.round(this.fontSize * 0.82));
+      e._label = {
+        x: mid.x, y: mid.y,
+        w: this.measureText(words, fs) + 14,
+        h: Math.max(16, this.fontSize * 1.35)
+      };
+    }
     var b = e._label, s = this.cam.s;
     return {
       left: b.x * s + this.cam.x - (b.w * s) / 2,
@@ -1200,12 +1300,14 @@
     return { x: n.x + side * n.w / 2, y: n.y };
   };
 
+  // only a folded branch has a badge, and only that badge can be pressed
   Mindmap.prototype.hitFold = function (px, py) {
     var p = this.toWorld(px, py);
     var r = Math.max(7, FOLD_R / this.cam.s);
     for (var i = this.nodes.length - 1; i >= 0; i--) {
       var n = this.nodes[i];
       if (this._hidden && this._hidden[n.id]) continue;
+      if (!n.collapsed) continue;
       var pt = this.foldPoint(n);
       if (!pt) continue;
       if (Math.hypot(p.x - pt.x, p.y - pt.y) <= r * 1.35) return n;
@@ -1351,6 +1453,29 @@
     return true;
   };
 
+  /* Start -- or restart -- the wait before a node can be carried.
+
+     Restarting rather than abandoning is the whole point. A hand is never
+     still, and giving up on the first wobble meant the node never lifted at
+     all, however long it was held: you let go, pressed again, waited again,
+     and one second of setting became about two of actual waiting. */
+  Mindmap.prototype._startHold = function (node, p) {
+    var self = this;
+    clearTimeout(this._armTimer);
+    this._drag.sx = p.x;
+    this._drag.sy = p.y;
+    this._drag.t0 = Date.now();
+    this._armTimer = setTimeout(function () {
+      self._armTimer = null;
+      if (!self._drag || self._drag.node !== node) return;
+      self._drag.armed = true;
+      self._lifted = node;
+      if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) { } }
+      self.draw();
+    }, HOLD_MS);
+    this.draw();
+  };
+
   Mindmap.prototype.hitGrip = function (px, py) {
     var n = this.handleNode();
     if (!n) return null;
@@ -1392,16 +1517,17 @@
       var oy = Math.min(ay1, my1) - Math.max(ay0, my0);
       var score;
 
-      if (ox > 0 && oy > 0) {
-        var deepX = Math.min(KISS, m.w * 0.5, node.w * 0.5);
-        var deepY = Math.min(KISS, m.h * 0.5, node.h * 0.5);
-        if (ox < deepX || oy < deepY) continue;   // a brush past is not an instruction
-        score = -Math.min(ox, oy);
-      } else {
-        var gap = Math.hypot(Math.max(0, -ox), Math.max(0, -oy));
-        if (gap > REACH) continue;
-        score = gap;
-      }
+      /* Only a node this one is actually sitting on counts. It used to reach
+         out REACH pixels and grab the nearest thing, which meant a node could
+         not simply be put down somewhere: move it anywhere near its
+         neighbours and it went hunting for a new parent. Nothing happens now
+         until the two boxes genuinely overlap -- which is what being carried
+         ONTO something means, and what you have to do on purpose. */
+      if (!(ox > 0 && oy > 0)) continue;
+      var deepX = Math.min(KISS, m.w * 0.5, node.w * 0.5);
+      var deepY = Math.min(KISS, m.h * 0.5, node.h * 0.5);
+      if (ox < deepX || oy < deepY) continue;   // a brush past is not an instruction
+      score = -Math.min(ox, oy);
 
       // dead heats settled by which middle is closer, never by which is bigger
       var mid = Math.hypot(m.x - node.x, m.y - node.y);
@@ -1540,7 +1666,7 @@
         return {
           text: n.text, color: n.color, shape: n.shape, image: n.image,
           pics: (n.pics || []).slice(), picS: (n.picS || []).slice(),
-          layout: n.layout, checklist: n.checklist, done: n.done,
+          layout: n.layout, checklist: n.checklist, tick: n.tick, done: n.done,
           fs: n.fs, w0: n.w0, h0: n.h0,
           dx: n.x - picked[0].x, dy: n.y - picked[0].y
         };
@@ -1576,7 +1702,7 @@
         text: c.text, color: c.color, shape: c.shape, image: c.image || null,
         pics: (c.pics || []).slice(), picS: (c.picS || []).slice(),
         layout: c.layout || undefined,
-        checklist: !!c.checklist, done: !!c.done,
+        checklist: !!c.checklist, tick: !!c.tick, done: !!c.done,
         fs: c.fs, w0: c.w0, h0: c.h0,
         x: baseX + c.dx, y: baseY + c.dy,
         noteId: null
@@ -2206,6 +2332,17 @@
     return removed;
   };
 
+  // how many nodes a delete would actually take, branch and all
+  Mindmap.prototype.deleteCount = function () {
+    if (this.selectedEdge) return 0;
+    var self = this, doomed = {};
+    this.selection.forEach(function (n) {
+      doomed[n.id] = true;
+      self.descendantsOf(n).forEach(function (d) { doomed[d.id] = true; });
+    });
+    return Object.keys(doomed).length;
+  };
+
   Mindmap.prototype.deleteSelected = function () {
     if (this.selectedEdge) {
       var e = this.selectedEdge;
@@ -2215,9 +2352,16 @@
       return 'link';
     }
     if (!this.selection.length) return null;
+    /* Everything under it goes too. A branch whose parent has gone is not a
+       branch any more -- it used to be left lying on the map as a row of
+       boxes attached to nothing, which is not what deleting a node means. */
+    var self = this;
     var doomed = {};
-    this.selection.forEach(function (n) { doomed[n.id] = true; });
-    var count = this.selection.length;
+    this.selection.forEach(function (n) {
+      doomed[n.id] = true;
+      self.descendantsOf(n).forEach(function (d) { doomed[d.id] = true; });
+    });
+    var count = Object.keys(doomed).length;
     this.nodes = this.nodes.filter(function (n) { return !doomed[n.id]; });
     this.edges = this.edges.filter(function (e2) { return !doomed[e2.a] && !doomed[e2.b]; });
     this.select(null);
@@ -2239,6 +2383,24 @@
     this.canvas.style.cursor = this.linkMode ? 'crosshair' : '';
     if (this.opts.onLinkModeChange) this.opts.onLinkModeChange(this.linkMode);
     this.draw();
+  };
+
+  /* Relate the nodes that are selected to each other -- the first one to
+     each of the rest. Picking two things and saying "these two" is the way
+     every other command on this map works, and it needs no mode, no order of
+     taps and nothing to remember you are halfway through. */
+  Mindmap.prototype.relateSelected = function (label) {
+    if (this.selection.length < 2) return 0;
+    var first = this.selection[0], made = null, n = 0;
+    for (var i = 1; i < this.selection.length; i++) {
+      var e = this.relate(first, this.selection[i], label || '');
+      if (e) { made = e; n++; }
+    }
+    if (made) {
+      this.selectedEdge = made;
+      if (this.opts.onEdgeSelect) this.opts.onEdgeSelect(made);
+    }
+    return n;
   };
 
   // Returns 'started' | 'linked' | 'unlinked' | 'cancelled' | null
@@ -2495,7 +2657,8 @@
   Mindmap.prototype.nodeLineOf = function (node, t) {
     var paint = this.paintOf(node, t);
     var limb = (node.color === 'plain' || !node.color) ? this.branchColorOf(node) : null;
-    return { fill: paint.fill, line: limb || paint.line, width: limb ? 1.6 : 1 };
+    // a hairline reads as a drawing; anything thicker reads as a border
+    return { fill: paint.fill, line: limb || paint.line, width: limb ? 1.1 : 0.85 };
   };
 
   Mindmap.prototype.edgeColorOf = function (e, t) {
@@ -2754,7 +2917,7 @@
       ctx.fill();
       var skin = this.nodeLineOf(n, t);
       ctx.strokeStyle = (sel || pending || dropping) ? t.accent : skin.line;
-      ctx.lineWidth = (pending || dropping) ? 3 : (sel ? 2 : skin.width);
+      ctx.lineWidth = (pending || dropping) ? 2.2 : (sel ? 1.6 : skin.width);
       if (dropping) ctx.setLineDash([6, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -2852,12 +3015,17 @@
     }
 
 
-    /* The fold handle: a small circle on the side of every node that has
-       children, minus while the branch is open and plus with a count while it
-       is away. Drawn after the nodes so it is never painted over. */
+    /* Only a branch that IS folded shows anything: a plus with the count of
+       what is hidden behind it, so nodes are never simply missing and there
+       is something to press to get them back.
+
+       The minus that used to sit on every parent whether or not it was doing
+       anything has gone. It was on screen the whole time, on every branching
+       node at once, for a thing you rarely do -- and folding is in the strip,
+       where the rest of the commands are. */
     for (var fk = 0; fk < this.nodes.length; fk++) {
       var fn2 = this.nodes[fk];
-      if (hid[fn2.id]) continue;
+      if (hid[fn2.id] || !fn2.collapsed) continue;
       var fp = this.foldPoint(fn2);
       if (!fp) continue;
       var fr = Math.max(6, FOLD_R / this.cam.s);
@@ -3023,38 +3191,28 @@
       }
     }
 
-    /* The circle that turns a node's children into a list. Only on the node
-       you are working on, so a map is not covered in them. */
-    for (var ck = 0; ck < this.nodes.length; ck++) {
-      var cn = this.nodes[ck];
-      if (hid[cn.id] || !this.isSelected(cn)) continue;
-      var cp = this.checkPoint(cn);
-      if (!cp) continue;
-      var cr = Math.max(6, FOLD_R / this.cam.s);
-      ctx.beginPath();
-      ctx.arc(cp.x, cp.y, cr, 0, Math.PI * 2);
-      ctx.fillStyle = cn.checklist ? t.accent : t.node;
-      ctx.fill();
-      ctx.lineWidth = 1.4 / this.cam.s;
-      ctx.strokeStyle = cn.checklist ? t.accent : t.edge;
+    /* There was a + circle here that made a node's children into a list. It
+       is gone: the Task button in the strip does that job, and a second way
+       in, hanging off the node itself, only put another control on top of a
+       box that already carries a fold handle and a box to tick. The one thing
+       a node needs on it is the box you tick. */
+
+    /* There was a ring here that closed as the hold counted down. It earned
+       its place at a second; at a fifth of one it is a flash of clutter on
+       every press, and the hold is now short enough that the node simply
+       lifts. Nothing to watch, nothing to wait for. */
+
+    /* A node held long enough to carry, so you can see it is off the ground. */
+    if (this._lifted && !hid[this._lifted.id]) {
+      var lift = this._lifted;
+      ctx.save();
+      ctx.strokeStyle = t.accent;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = Math.max(3, 4 / this.cam.s);
+      this._roundRect(ctx, lift.x - lift.w / 2 - 5, lift.y - lift.h / 2 - 5,
+                      lift.w + 10, lift.h + 10, 13);
       ctx.stroke();
-      var cb = cr * 0.5;
-      ctx.lineWidth = Math.max(1.4, 1.8 / this.cam.s);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = cn.checklist ? t.node : t.text;
-      ctx.beginPath();
-      if (cn.checklist) {                     // already a list: show a tick
-        ctx.moveTo(cp.x - cb * 0.8, cp.y);
-        ctx.lineTo(cp.x - cb * 0.15, cp.y + cb * 0.7);
-        ctx.lineTo(cp.x + cb * 0.85, cp.y - cb * 0.7);
-      } else {                                 // not yet: a plus
-        ctx.moveTo(cp.x - cb, cp.y);
-        ctx.lineTo(cp.x + cb, cp.y);
-        ctx.moveTo(cp.x, cp.y - cb);
-        ctx.lineTo(cp.x, cp.y + cb);
-      }
-      ctx.stroke();
+      ctx.restore();
     }
 
     /* The two handles on the chosen relationship, with a thin line back to
@@ -3230,14 +3388,6 @@
         self.toggleDone(tickAt);
         return;
       }
-      var listAt = self.linkMode ? null : self.hitCheckToggle(p.x, p.y);
-      if (listAt) {
-        self._drag = null;
-        self.toggleChecklist(listAt);
-        if (self.opts.onSelect) self.opts.onSelect(self.selected);
-        return;
-      }
-
       var fold = self.linkMode ? null : self.hitFold(p.x, p.y);
       if (fold) {
         self._drag = null;
@@ -3285,29 +3435,25 @@
          stuck on the node you selected before. */
       if (e.pointerType !== 'mouse') self._hover = n;
 
-      // held still on a node: its menu, the same one the right button gives
-      if (n && e.pointerType !== 'mouse' && self.opts.onNodeMenu) {
-        clearTimeout(self._pressTimer);
-        self._pressTimer = setTimeout(function () {
-          self._pressTimer = null;
-          // already carrying it somewhere: that is not a long press
-          if (self._drag && self._drag.moved) return;
-          self._drag = null;
-          self.select(n);
-          self.opts.onNodeMenu(n, e.clientX, e.clientY);
-        }, 620);
-      }
-
       if (self.linkMode) {
         if (n) {
           var r = self.linkTo(n);
+          // done: out of the mode, rather than left armed for another one
+          if (r === 'related' || r === 'unlinked') self.setLinkMode(false);
           if (self.opts.onLinkStep) self.opts.onLinkStep(r);
         } else {
           var edge = self.hitEdge(p.x, p.y);
           if (edge) {
             self.edges = self.edges.filter(function (x) { return x !== edge; });
             self._changed();
+            self.setLinkMode(false);
             if (self.opts.onLinkStep) self.opts.onLinkStep('unlinked');
+          } else {
+            /* Empty space: give up on it. A half-made link used to leave its
+               thread hanging off a node with nothing to end it and no way to
+               say you had changed your mind. */
+            self.setLinkMode(false);
+            if (self.opts.onLinkStep) self.opts.onLinkStep('cancelled');
           }
         }
         return;
@@ -3332,8 +3478,13 @@
         });
         self._drag = {
           node: n, moved: false, sx: p.x, sy: p.y, shift: e.shiftKey, gaps: gaps,
+          armed: false,
           movers: movers.map(function (m) { return { n: m, dx: m.x - w.x, dy: m.y - w.y }; })
         };
+        /* Nothing moves until the node has been held. Brushing across a map
+           while reading it used to drag whatever was under the pointer, and
+           the map you were looking at was quietly not the map any more. */
+        self._startHold(n, p);
       } else {
         var edge2 = self.hitEdgeLabel(p.x, p.y) || self.hitEdge(p.x, p.y);
         if (edge2) {
@@ -3492,6 +3643,13 @@
         self.cam.y = self._drag.cy + (p.y - self._drag.sy);
         self.draw();
       } else {
+        if (!self._drag.armed) {
+          // the hand moved on: hold from where it is now, rather than give up
+          if (Math.hypot(p.x - self._drag.sx, p.y - self._drag.sy) > HOLD_SLOP) {
+            self._startHold(self._drag.node, p);
+          }
+          return;
+        }
         if (!self._drag.moved &&
             Math.hypot(p.x - self._drag.sx, p.y - self._drag.sy) < DRAG_SLOP) return;
 
@@ -3559,6 +3717,9 @@
     function endPointer(e) {
       clearTimeout(self._pressTimer);
       self._pressTimer = null;
+      clearTimeout(self._armTimer);
+      self._armTimer = null;
+      self._lifted = null;
 
       if (self._knob) {
         self._knob = null;
@@ -3620,6 +3781,24 @@
       if (self._marquee) {
         self._marquee = null;
         self._pointers.delete(e.pointerId);
+        self.draw();
+        return;
+      }
+      /* Held a good while, then let go without going anywhere. On a
+         touchscreen that is how the node's menu is asked for.
+
+         It is timed separately from the carry on purpose. Picking a node up
+         wants to be quick -- a fifth of a second -- but a tap that happens to
+         last that long is still a tap, and having the menu appear on it would
+         be maddening. The menu waits for a hold you meant. */
+      if (self._drag && self._drag.armed && !self._drag.moved &&
+          self._drag.t0 && Date.now() - self._drag.t0 >= MENU_MS &&
+          e.pointerType !== 'mouse' && !self._drag.shift && self.opts.onNodeMenu) {
+        var held = self._drag.node;
+        self._drag = null;
+        self._pointers.delete(e.pointerId);
+        self.select(held);
+        self.opts.onNodeMenu(held, e.clientX, e.clientY);
         self.draw();
         return;
       }

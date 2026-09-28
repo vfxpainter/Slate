@@ -104,6 +104,10 @@
     <header class="pane-head">
       <button class="icon-btn only-narrow back-btn" data-act="editor-back" title="Back" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4.5 7.5 12l7.5 7.5"/></svg></button>
       <button class="folder-chip" data-act="move" id="editorCrumb" title="Move to another folder"></button>
+      <button class="icon-btn save-btn" data-act="save-now" id="saveBtn" hidden
+        title="Save now" aria-label="Save now">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7"/></svg>
+      </button>
       <div class="undo-pair">
         <button class="icon-btn" data-act="undo" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
@@ -127,7 +131,7 @@
       <div class="menu node-menu" id="nodeMenu" hidden>
         <button data-act="map-rename"><b>Edit text</b></button>
         <button data-act="map-child"><b>Add child</b></button>
-        <button data-act="map-checklist"><b>Tick list</b></button>
+        <button data-act="map-checklist"><b>Task</b></button>
         <button data-act="map-copy"><b>Copy</b></button>
         <button data-act="map-paste"><b>Paste</b></button>
         <button data-act="map-duplicate"><b>Duplicate</b></button>
@@ -224,11 +228,11 @@
         <!-- mindmap -->
         <div class="map-editor" id="mapEditor" hidden>
           <div class="map-tools">
-            <button class="ghost-btn" data-act="map-sibling">&#43; Sibling <kbd>Enter</kbd></button>
             <button class="ghost-btn" data-act="map-child">&#43; Child <kbd>Tab</kbd></button>
+            <button class="ghost-btn" data-act="map-sibling">&#43; Sibling <kbd>Enter</kbd></button>
             <button class="ghost-btn" data-act="map-rename">Rename <kbd>Enter</kbd></button>
             <button class="ghost-btn" data-act="map-select-mode" id="selModeBtn">Select <kbd>drag</kbd></button>
-            <button class="ghost-btn" data-act="map-link" id="linkBtn">Link <kbd>Ctrl+L</kbd></button>
+            <button class="ghost-btn" data-act="map-link" id="linkBtn">Relate <kbd>Ctrl+L</kbd></button>
             <button class="ghost-btn" data-act="map-image">&#128247; Image</button>
             <button class="ghost-btn" data-act="map-image-remove" hidden>Remove image</button>
             <button class="ghost-btn" data-act="map-copy">Copy <kbd>Ctrl+C</kbd></button>
@@ -239,7 +243,7 @@
             <button class="ghost-btn" data-act="map-zoom-in">&#43;</button>
             <button class="ghost-btn" data-act="map-fit">Fit</button>
             <button class="ghost-btn" data-act="map-auto" id="autoBtn">Auto-arrange</button>
-            <button class="ghost-btn" data-act="map-checklist">Tick list</button>
+            <button class="ghost-btn" data-act="map-checklist">Task</button>
             <button class="ghost-btn" data-act="map-find">Find <kbd>Ctrl+F</kbd></button>
             <button class="ghost-btn" data-act="map-present">Present</button>
             <button class="ghost-btn" data-act="map-style-toggle" id="styleBtn">Style</button>
@@ -300,11 +304,11 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l8.5 4.2-8.5 4.2-8.5-4.2z"/><path d="M3.5 12.2l8.5 4.2 8.5-4.2"/><path d="M3.5 16.4l8.5 4.2 8.5-4.2"/></svg>
             </button>
             <div class="map-quick" id="mapQuick">
-              <button class="quick-btn" data-act="map-child">Child</button>
               <button class="quick-btn" data-act="map-sibling">Sibling</button>
+              <button class="quick-btn" data-act="map-child">Child</button>
               <button class="quick-btn" data-act="map-rename">Edit</button>
               <button class="quick-btn" data-act="map-fold">Fold</button>
-              <button class="quick-btn" data-act="map-checklist">Tick list</button>
+              <button class="quick-btn" data-act="map-checklist">Task</button>
               <button class="quick-btn" data-act="map-style-toggle">Colour</button>
               <button class="quick-btn" data-act="map-image">Picture</button>
               <button class="quick-btn" data-act="map-image-remove" hidden>Remove picture</button>
@@ -312,7 +316,7 @@
               <button class="quick-btn" data-act="map-pic-smaller" hidden>Smaller picture</button>
               <button class="quick-btn" data-act="map-pic-bigger" hidden>Bigger picture</button>
               <button class="quick-btn" data-act="map-pic-reset" hidden>Picture back to normal</button>
-              <button class="quick-btn" data-act="map-link">Link</button>
+              <button class="quick-btn" data-act="map-link">Relate</button>
               <button class="quick-btn" data-act="map-duplicate">Duplicate</button>
               <button class="quick-btn danger" data-act="map-del">Delete</button>
             </div>

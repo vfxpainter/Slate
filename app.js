@@ -25,6 +25,8 @@
     map: null,            // live Mindmap instance
     mapNoteId: null,      // note the canvas currently holds
     keepView: null,       // the camera to hand back after an undo remounts
+    dirty: false,         // edits made that have not been written yet
+    askDelete: true,      // check before anything goes
     editingNode: null,
     editingEdge: null,    // the relationship whose words are being typed    // node whose text is being edited on the canvas
     font: { family: 'system', size: 16 },
@@ -266,6 +268,8 @@
     if (ag) S.autoGap = ag;
     var ak = parseInt(localStorage.getItem('sulat-autokeep'), 10);
     if (ak > 0) S.autoKeep = ak;
+    var ad = localStorage.getItem('sulat-askdelete');
+    if (ad !== null) S.askDelete = ad === '1';
     var ax = localStorage.getItem('sulat-askexit');
     if (ax !== null) S.askOnExit = ax === '1';
     var ul = parseInt(localStorage.getItem('sulat-undolevels'), 10);
@@ -947,8 +951,20 @@
      is how mindmap edits used to slip past unnoticed. */
   function scheduleSave() {
     markChanged();
+    S.dirty = true;
+    renderSaveBtn();
     clearTimeout(S.saveTimer);
     S.saveTimer = setTimeout(flush, SAVE_DELAY);
+  }
+
+  /* Shown only while something is waiting to be written. An always-on save
+     button teaches you nothing; one that appears when there is work to save
+     and goes away when there is not answers the question by being there. */
+  function renderSaveBtn() {
+    var b = $('saveBtn');
+    if (!b) return;
+    b.hidden = !S.dirty;
+    b.classList.toggle('saved', !S.dirty);
   }
 
   function touch() {
@@ -960,6 +976,8 @@
   function flush() {
     clearTimeout(S.saveTimer);
     S.saveTimer = null;
+    S.dirty = false;                 // whatever was waiting is on its way down
+    renderSaveBtn();
     scheduleAutoBackup();
     if (!S.note) return Promise.resolve();
     var n = S.note;
@@ -1573,6 +1591,13 @@
       renderUndoButtons();
       toast(S.undoLevels + ' steps kept');
     });
+    check('Ask before deleting', 'Nodes and branches. Anything permanent always asks.',
+      S.askDelete, function () {
+        S.askDelete = !S.askDelete;
+        try { localStorage.setItem('sulat-askdelete', S.askDelete ? '1' : '0'); }
+        catch (e) { /* private mode */ }
+        return S.askDelete;
+      });
     row('Backup & transfer', 'Export, import, merge, snapshots', 'open-transfer');
 
     head('Reading and writing');
@@ -2109,6 +2134,7 @@
   }
 
   function openNote(id) {
+    if (!S.saveTimer) { S.dirty = false; renderSaveBtn(); }
     var leaving = S.note && S.note.id !== id ? S.note : null;
     flush();
     if (S.draftId && S.draftId !== id) discardDraft();
@@ -3853,7 +3879,11 @@ function toggleImgFree() {
     'map-child': '<rect x="2.5" y="3" width="9" height="7" rx="2"/><path d="M7 10v6.5a1.5 1.5 0 0 0 1.5 1.5H12"/><rect x="12.5" y="14" width="9" height="7" rx="2"/><path d="M17 16.5v2M16 17.5h2"/>',
     'map-rename': '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     'map-select-mode': '<rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="3 2.6"/>',
-    'map-link': '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.4 1.4"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.4-1.4"/>',
+    /* Not a chain link. A chain says "these two are fastened together", which
+       is what a branch does; a relationship is a remark thrown across the map
+       from one node to another, so it is drawn as one: an arc leaving a node
+       and arriving somewhere else. */
+    'map-link': '<circle cx="6.8" cy="17" r="2.3"/><path d="M7.7 14.8C9 9 14.5 5.5 17.4 9.2c1.8 2.4-.2 5.2-1.4 7.8"/><path d="M13.5 15 16 17.6 18.5 15"/>',
     'map-image': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8 8"/>',
     'map-image-remove': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.5" cy="9.5" r="1.4"/><path d="M3.5 16l4-4 3 3"/><path d="M13.5 10.5l6 6M19.5 10.5l-6 6"/>',
     'map-copy': '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
@@ -3867,7 +3897,10 @@ function toggleImgFree() {
     'map-style-toggle': '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.7 1.8-1.7H17a4 4 0 0 0 4-4c0-4.2-4-7.8-9-7.8z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="14.5" cy="7" r="1"/>',
     'map-fold': '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
     'map-copy-text': '<rect x="8" y="3.5" width="12" height="15" rx="2"/><path d="M16 18.5v1.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 20V8.5A1.5 1.5 0 0 1 5.5 7H8"/><path d="M11.5 8h5M11.5 11.5h5M11.5 15h3"/>',
-    'map-checklist': '<path d="M3.5 6.5l2 2 3.5-3.5"/><path d="M3.5 15.5l2 2 3.5-3.5"/><path d="M12.5 7h8M12.5 16h8"/>',
+    /* A task, not a list of rules: a check inside a circle, the same mark
+       every app uses for "this is a thing to be done". The three ruled lines
+       it replaced read as a document. */
+    'map-checklist': '<circle cx="12" cy="12" r="8.5"/><path d="M8.3 12.2 11 14.9l4.8-5.2"/>',
     'map-pic-smaller': '<rect x="6" y="7.5" width="12" height="9" rx="1.8"/><path d="M9 12h6"/>',
     'map-pic-change': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7 15l3-3 2 2 2.5-3 2.5 4"/><path d="M14.5 3.5l2.5 2.5-2.5 2.5"/><path d="M17 6h-4"/>',
     'map-pic-bigger': '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M12 9.5v5M9.5 12h5"/>',
@@ -3897,9 +3930,13 @@ function toggleImgFree() {
     var on = !!(node && node.checklist);
     Array.prototype.forEach.call(
       document.querySelectorAll('#mapQuick [data-act="map-checklist"]'), function (b) {
-        b.disabled = !(node && S.map && S.map.descendantsOf(node).length);
-        b.classList.toggle('on', on);
-        b.title = b.disabled ? 'Nothing under this one to tick off'
+        /* Any node at all. A node at the end of a branch is usually the thing
+           you actually do, and it was the one thing this button refused. */
+        var leaf = !!(node && S.map && !S.map.descendantsOf(node).length);
+        b.disabled = !node;
+        b.classList.toggle('on', on || !!(node && node.tick));
+        b.title = !node ? 'Select a node first'
+          : leaf ? (node.tick ? 'Not a task any more' : 'Make this a task')
           : (on ? 'Back to an ordinary branch' : 'Tick off this branch');
       });
   }
@@ -3974,12 +4011,15 @@ function toggleImgFree() {
      under that"; a relationship has to say what it is for. */
   /* Just made: put the text box on it rather than a dialog. The label has
      to be drawn once before there is a box to sit over, so this waits a frame. */
+  /* Straight into its words. The box used to wait a frame for the map to have
+     drawn the label once, which made a brand new relationship feel stiff --
+     you made it, and then had to go and find it before you could say what it
+     was. The map works the box out on demand now, so there is nothing to
+     wait for. */
   function labelRelationNow() {
     var edge = S.map && S.map.selectedEdge;
     if (!edge || !edge.rel) return;
-    requestAnimationFrame(function () {
-      if (S.map && S.map.selectedEdge === edge) startEdgeLabelEdit(edge);
-    });
+    startEdgeLabelEdit(edge);
   }
 
   function labelRelationDialog() {
@@ -6465,13 +6505,35 @@ function toggleImgFree() {
       if (!S.map.selected) { toast('Select a node first.'); return; }
       S.map.opts.onRename(S.map.selected);
     },
-    'map-link': function () { toggleLinkMode(); },
+    'save-now': function () {
+      flush();
+      toast('Saved');
+    },
+    'map-link': function () { relateOrLinkMode(); },
     'map-del': function () {
-      var what = S.map.deleteSelected();
-      if (!what) toast('Select a node or a link first.');
-      else if (what === 'link') toast('Link removed');
-      else toast(plural(what, 'node') + ' removed — Ctrl+Z to undo');
-      focusMap();
+      if (!S.map.selectedEdge && !S.map.selection.length) {
+        toast('Select a node or a link first.');
+        return;
+      }
+      var going = S.map.deleteCount();
+      function done() {
+        var what = S.map.deleteSelected();
+        if (what === 'link') toast('Link removed');
+        else if (what) toast(plural(what, 'node') + ' removed — Ctrl+Z to undo');
+        focusMap();
+      }
+      /* A branch goes with its parent now, so the count is the honest one --
+         and being asked matters most exactly when it is larger than the one
+         node you had in mind. */
+      if (!S.askDelete || S.map.selectedEdge) { done(); return; }
+      var picked = S.map.selection.length;
+      confirmDialog(
+        going > 1 ? 'Delete ' + plural(going, 'node') + '?' : 'Delete this node?',
+        going > picked
+          ? 'Everything under ' + (picked > 1 ? 'them' : 'it') +
+            ' goes as well. You can undo this.'
+          : 'You can undo this.',
+        'Delete', done);
     },
     'map-color': function (e, t) {
       /* With a link chosen the swatches colour the link. Picking a colour is
@@ -6658,9 +6720,20 @@ function toggleImgFree() {
     },
     'map-checklist': function () {
       if (!S.map || !S.map.selected) { toast('Select a node first.'); return; }
-      var many = S.map.toggleChecklistBranch(S.map.selected);
-      if (!many) { toast('Nothing under that one to tick off'); return; }
-      toast(S.map.selected.checklist
+      var one = S.map.selected;
+      /* Nothing under it: it is a task in its own right rather than the head
+         of a list. This used to refuse, which meant the last node on a branch
+         -- usually the thing actually being done -- could not be ticked. */
+      if (!S.map.descendantsOf(one).length) {
+        S.map.toggleChecklist(one);
+        toast(one.tick ? 'A task now — click the box to tick it off'
+                       : 'Not a task any more');
+        renderMapTools(one);
+        focusMap();
+        return;
+      }
+      var many = S.map.toggleChecklistBranch(one);
+      toast(one.checklist
         ? plural(many, 'node') + ' can be ticked off now'
         : 'Back to an ordinary branch');
       renderMapTools(S.map.selected);
@@ -6730,10 +6803,27 @@ function toggleImgFree() {
     toast('New nodes sit ' + y + 'px apart');
   }
 
-  function toggleLinkMode() {
+  /* Pick the nodes, then say "relate these". The mode was the problem: you
+     had to turn it on, remember you were in it, tap in the right order, and
+     nothing on screen told you which of those you had got wrong. Selecting
+     two things first is how every other command here works. */
+  function relateOrLinkMode() {
     if (!S.map || $('mapEditor').hidden) return;
+    if (S.map.selection.length >= 2) {
+      if (S.map.linkMode) S.map.setLinkMode(false);
+      var n = S.map.relateSelected('');
+      if (!n) { toast('Those are already related.'); return; }
+      toast(n > 1 ? n + ' relationships made' : 'Related — type what it says');
+      labelRelationNow();
+      focusMap();
+      return;
+    }
     S.map.setLinkMode(!S.map.linkMode);
-    if (S.map.linkMode) toast('Link mode on — tap two nodes');
+    if (S.map.linkMode) {
+      toast(S.map.selection.length
+        ? 'Now tap the node to relate it to'
+        : 'Tap two nodes to relate them');
+    }
     focusMap();
   }
 

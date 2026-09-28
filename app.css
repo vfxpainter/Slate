@@ -2882,3 +2882,15 @@ body.dragging-note .note-scroll { touch-action: none; }
   border-color: var(--accent);
   color: #17130e;
 }
+
+/* The save button: there only while something is waiting to be written, so
+   its presence is the message and its absence is the other message. */
+.save-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.save-btn svg { stroke-width: 2.6; }
+.save-btn.saved {
+  color: var(--ink-3);
+  border-color: transparent;
+}
