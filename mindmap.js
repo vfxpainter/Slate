@@ -1063,8 +1063,19 @@
         side = e._side || 1;
       }
 
-      var k1 = capped(e.k1 || { a: 0.22, o: lift * side });
-      var k2 = capped(e.k2 || { a: 0.78, o: lift * side });
+      /* Far enough along to be clear of the boxes. A control point at a flat
+         22% of the way sits inside its own node whenever the two are close,
+         and the handle drawn on it lands on top of the box -- a thing to drag
+         hidden under a thing to drag. Each one starts outside its own node's
+         edge with a little air, and only then takes the flat figure. */
+      var outA = (Math.hypot(borderPoint(a, b).x - a.x,
+                             borderPoint(a, b).y - a.y) + 18) / len;
+      var outB = (Math.hypot(borderPoint(b, a).x - b.x,
+                             borderPoint(b, a).y - b.y) + 18) / len;
+      var at1 = Math.min(0.44, Math.max(0.22, outA));
+      var at2 = Math.max(0.56, Math.min(0.78, 1 - outB));
+      var k1 = capped(e.k1 || { a: at1, o: lift * side });
+      var k2 = capped(e.k2 || { a: at2, o: lift * side });
       var c1 = { x: a.x + (ux * k1.a + px * k1.o) * len,
                  y: a.y + (uy * k1.a + py * k1.o) * len };
       var c2 = { x: a.x + (ux * k2.a + px * k2.o) * len,
@@ -1612,13 +1623,34 @@
   Mindmap.prototype.addChild = function (parent) {
     var p = parent || this.selected;
     if (!p) return this.addNode();
-    var kids = this.edges.filter(function (e) { return e.a === p.id; }).length;
-    var away = this.layoutOf(p) === 'left' ? -1 : 1;
+    /* Put it past the last one there is. Tidying sorts brothers and sisters by
+       where they are on screen, so a new node dropped beside its parent landed
+       in the MIDDLE of the row and shoved half of them along to make room. It
+       goes on the end, where there is nothing to disturb. */
+    var self = this, grow = this.layoutOf(p), kin = [];
+    this.branchEdges().forEach(function (e) {
+      if (e.a !== p.id) return;
+      var k = self.byId(e.b);
+      if (k) kin.push(k);
+    });
+    var away = grow === 'left' ? -1 : 1;
+    var nx, ny;
+    if (grow === 'down') {
+      nx = kin.length
+        ? Math.max.apply(null, kin.map(function (k) { return k.x + k.w / 2; })) + this.gapX
+        : p.x;
+      ny = p.y + p.h / 2 + this.gapY * 1.4;
+    } else {
+      nx = p.x + away * (p.w / 2 + this.gapX);
+      ny = kin.length
+        ? Math.max.apply(null, kin.map(function (k) { return k.y + k.h / 2; })) + this.gapY
+        : p.y;
+    }
     var n = {
       id: DB.uid(),
       text: 'Idea',
-      x: p.x + away * (p.w / 2 + this.gapX),
-      y: p.y + (kids ? (kids % 2 ? 1 : -1) * Math.ceil(kids / 2) * this.gapY : 0),
+      x: nx,
+      y: ny,
       color: p.color || 'plain',       // children inherit the parent's colour
       image: null,
       noteId: null
@@ -1944,6 +1976,32 @@
       if (down) cx += box[r.id].w + gx * 3;
       else cy += box[r.id].h + gy * 4;
     });
+
+    /* What was already on the map stays where it was.
+
+       A row is laid out from its middle, so the moment another node joins it
+       every node in it slides sideways -- the map you were reading rearranges
+       itself under you for the sake of one new box at the end. The corner the
+       map grows away from is pinned to where it was, and the growing happens
+       at the far end where there is nothing to disturb. Nodes placed for the
+       first time are left out of the reckoning, or the new one would drag the
+       whole map to meet it. */
+    var oldX = Infinity, oldY = Infinity, newX = Infinity, newY = Infinity;
+    this.nodes.forEach(function (n) {
+      var old = was[n.id];
+      if (!old || !n._placed || hid[n.id]) return;
+      oldX = Math.min(oldX, old.x - n.w / 2);
+      oldY = Math.min(oldY, old.y - n.h / 2);
+      newX = Math.min(newX, n.x - n.w / 2);
+      newY = Math.min(newY, n.y - n.h / 2);
+    });
+    if (oldX !== Infinity && newX !== Infinity) {
+      var slideX = oldX - newX, slideY = oldY - newY;
+      if (slideX || slideY) {
+        this.nodes.forEach(function (n) { n.x += slideX; n.y += slideY; });
+      }
+    }
+    this.nodes.forEach(function (n) { n._placed = true; });
 
     // anything that moved glides there rather than jumping
     var now = Date.now();
