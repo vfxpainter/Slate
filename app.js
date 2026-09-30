@@ -4279,8 +4279,11 @@ function toggleImgFree() {
         onLinkStep: function (result) {
           if (result === 'started') toast('Now tap the node to relate it to');
           else if (result === 'related') labelRelationNow();
-          else if (result === 'unlinked') toast('Link removed');
-          else if (result === 'cancelled') toast('Link cancelled');
+          else if (result === 'unlinked') toast('Relationship removed');
+          else if (result === 'cancelled') toast('Cancelled');
+          else if (result === 'joined') {
+            toast('Those two are already joined — one is under the other');
+          }
         },
         onSelect: function (node) { renderMapTools(node); },
         onNodeMenu: function (node, x, y) { showNodeMenu(x, y); },
@@ -6812,7 +6815,10 @@ function toggleImgFree() {
     if (S.map.selection.length >= 2) {
       if (S.map.linkMode) S.map.setLinkMode(false);
       var n = S.map.relateSelected('');
-      if (!n) { toast('Those are already related.'); return; }
+      if (!n) {
+        toast('Nothing to relate — those are already joined or already related.');
+        return;
+      }
       toast(n > 1 ? n + ' relationships made' : 'Related — type what it says');
       labelRelationNow();
       focusMap();

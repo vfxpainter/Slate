@@ -2200,12 +2200,15 @@
     if (!a || !b || a === b) return null;
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
-      if (!e.rel) continue;
-      if ((e.a === a.id && e.b === b.id) || (e.a === b.id && e.b === a.id)) {
-        e.label = label || e.label || '';
-        this._changed();
-        return e;
-      }
+      if (!((e.a === a.id && e.b === b.id) || (e.a === b.id && e.b === a.id))) continue;
+      /* Already parent and child. There is a line between them, so a second
+         one saying the same thing is nothing to add -- and it would be thrown
+         away as a duplicate a moment later anyway, leaving the tree looking
+         mangled for no reason. */
+      if (!e.rel) return null;
+      e.label = label || e.label || '';
+      this._changed();
+      return e;
     }
     var made = { a: a.id, b: b.id, rel: true, label: label || '' };
     this.edges.push(made);
@@ -2417,10 +2420,17 @@
       return 'cancelled';
     }
     var a = this.linkFrom.id, b = node.id;
-    var existing = null;
+    /* Only a RELATIONSHIP can be taken off again here. It used to remove
+       whatever edge it found between the two, branch edges included -- so
+       relating a node to its own parent cut the branch, the node became a
+       root of its own, and the next arrange threw it across the map. A
+       relationship tool must never be able to dismantle the tree. */
+    var existing = null, joined = false;
     for (var i = 0; i < this.edges.length; i++) {
       var e = this.edges[i];
-      if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) { existing = e; break; }
+      if (!((e.a === a && e.b === b) || (e.a === b && e.b === a))) continue;
+      if (e.rel) { existing = e; break; }
+      joined = true;                      // already parent and child
     }
     var from = this.linkFrom;
     this.linkFrom = null;
@@ -2429,6 +2439,7 @@
       this._changed();
       return 'unlinked';
     }
+    if (joined) { this.draw(); return 'joined'; }
     /* Always a relationship. Branches are made by carrying one node onto
        another, and a node has exactly one parent -- so the only thing left
        for this tool to make is the other sort of connection. */
@@ -3355,14 +3366,22 @@
 
       /* The middle button means "move the map", whatever is under the
          pointer. Caught here, before a single thing is hit-tested, because
-         pressing the wheel over a node used to pick the node up instead. */
-      if (e.button === 1) {
-        e.preventDefault();
+         pressing the wheel over a node used to pick the node up instead.
+
+         The right button means the same, and its menu when it has not moved.
+         It was falling through to the node under it, so holding the right
+         button and dragging carried nodes off their branch and dropped them
+         somewhere else -- a menu gesture quietly rearranging the map. The
+         right button never changes anything now. */
+      if (e.button === 1 || e.button === 2) {
+        if (e.button === 1) e.preventDefault();
         self._picDown = null;
         self._picSize = null;
         self._picMove = false;
         self._dropOn = null;
-        self._drag = { pan: true, sx: p.x, sy: p.y, cx: self.cam.x, cy: self.cam.y };
+        self._rightPanned = false;
+        self._drag = { pan: true, sx: p.x, sy: p.y, cx: self.cam.x, cy: self.cam.y,
+                       right: e.button === 2 };
         c.style.cursor = 'grabbing';
         return;
       }
@@ -3641,6 +3660,11 @@
       if (self._drag.pan) {
         self.cam.x = self._drag.cx + (p.x - self._drag.sx);
         self.cam.y = self._drag.cy + (p.y - self._drag.sy);
+        // a right-drag that went somewhere was a pan, not a call for the menu
+        if (self._drag.right &&
+            Math.hypot(p.x - self._drag.sx, p.y - self._drag.sy) > DRAG_SLOP) {
+          self._rightPanned = true;
+        }
         self.draw();
       } else {
         if (!self._drag.armed) {
@@ -3728,7 +3752,7 @@
         self._pointers.delete(e.pointerId);
         return;
       }
-      if (e.button === 1 || (self._drag && self._drag.pan)) {
+      if (e.button === 1 || e.button === 2 || (self._drag && self._drag.pan)) {
         c.style.cursor = self.linkMode ? 'crosshair' : '';
       }
 
@@ -3895,10 +3919,12 @@
       if (self._pointers.size === 0) self._drag = null;
     }
     c.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+      // the button was used to drag the map about; it was not asking for this
+      if (self._rightPanned) { self._rightPanned = false; return; }
       if (!self.opts.onNodeMenu) return;
       var p = self._localPoint(e);
       var n = self.hit(p.x, p.y);
-      e.preventDefault();
       if (!n) return;
       self.select(n);
       self.opts.onNodeMenu(n, e.clientX, e.clientY);
