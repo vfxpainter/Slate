@@ -1501,6 +1501,82 @@
      little daylight allowed, because that is what it looks like you are doing
      when you push one node up against another. Where several are touching, the
      nearest middle wins, so pushing into a crowd still picks one. */
+  /* Where a carried node would join, and as what -- decided by WHERE YOU ARE
+     POINTING, not by where the middle of the thing you are carrying happens
+     to be.
+
+     That was the bug. The rule was "is the dragged node's middle inside the
+     target", which works while everything is about the same size and fails
+     completely as soon as it is not: carry a big node full of pictures up to
+     a small one and its middle is half a node-width away from anything you
+     are aiming at, so it could not be attached at all. You had to bury the
+     small node completely to make it count.
+
+     Your hand is the aim. Two cases, and nothing else:
+
+       pointing at a node        -> it goes UNDER that node
+       pointing at a gap, with
+       the boxes overlapping     -> it goes INTO that row, where you are
+
+     `hand` is in canvas pixels; without it this falls back to the carried
+     node's middle, which is all an old caller can offer. */
+  Mindmap.prototype.dropTarget = function (node, skip, hand) {
+    if (hand) {
+      var under = this.hit(hand.x, hand.y, skip);
+      if (under) return { node: under, beside: null };
+      var gap = this._gapAt(this.toWorld(hand.x, hand.y), skip);
+      if (gap) return gap;
+    }
+    /* Touching a node means going under it. This is the ordinary case and it
+       is now the fallback: slipping into a row is the special one, and it has
+       to be aimed at. Before, ANY drop the hand was not directly over fell
+       through to "join that row", so carrying a big node up against a small
+       one -- edges overlapping, hand still out over the pictures -- quietly
+       filed it somewhere else instead of hanging it where it was put. */
+    var onto = this.kissing(node, skip);
+    return onto ? { node: onto, beside: null } : null;
+  };
+
+  /* The gap between two nodes that share a parent, if the hand is in one.
+     Along the way the row runs, the hand has to be past the end of one and
+     short of the start of the next; across it, roughly level with them. That
+     is a deliberate aim, which is what telling a row apart from a node needs
+     to be -- everything else means the node you are touching. */
+  Mindmap.prototype._gapAt = function (hw, skip) {
+    var self = this, best = null, bestD = Infinity;
+    var kids = {};
+    this.branchEdges().forEach(function (e) {
+      var k = self.byId(e.b);
+      if (!k || (skip && skip.indexOf(k) !== -1)) return;
+      if (self._hidden && self._hidden[k.id]) return;
+      (kids[e.a] = kids[e.a] || []).push(k);
+    });
+    Object.keys(kids).forEach(function (pid) {
+      var par = self.byId(pid);
+      if (!par || (skip && skip.indexOf(par) !== -1)) return;
+      var row = kids[pid];
+      if (row.length < 2) return;
+      var down = self.layoutOf(par) === 'down';
+      row.sort(function (p, q) { return down ? p.x - q.x : p.y - q.y; });
+      for (var i = 0; i < row.length - 1; i++) {
+        var A = row[i], B = row[i + 1];
+        var aEnd = down ? A.x + A.w / 2 : A.y + A.h / 2;
+        var bStart = down ? B.x - B.w / 2 : B.y - B.h / 2;
+        var along = down ? hw.x : hw.y;
+        if (along < aEnd || along > bStart) continue;
+        var cross = down ? hw.y : hw.x;
+        var lo = down ? Math.min(A.y - A.h / 2, B.y - B.h / 2)
+                      : Math.min(A.x - A.w / 2, B.x - B.w / 2);
+        var hi = down ? Math.max(A.y + A.h / 2, B.y + B.h / 2)
+                      : Math.max(A.x + A.w / 2, B.x + B.w / 2);
+        if (cross < lo - 26 || cross > hi + 26) continue;
+        var d = Math.abs(along - (aEnd + bStart) / 2);
+        if (d < bestD) { bestD = d; best = { node: par, beside: A }; }
+      }
+    });
+    return best;
+  };
+
   Mindmap.prototype.kissing = function (node, skip) {
     if (!node) return null;
     /* One score for every node, so that overlapping and merely-near ones are
@@ -1607,7 +1683,11 @@
   };
 
   // Slide a new node down until it is not sitting on top of an existing one.
-  Mindmap.prototype._nudgeClear = function (node) {
+  /* Shuffle a new node clear of anything it has landed on. It moves ALONG the
+     way its branch grows -- rightwards in a row, downwards in a column -- so
+     clearing a clash keeps it at the end of its row instead of dropping it
+     out of the row altogether. */
+  Mindmap.prototype._nudgeClear = function (node, along) {
     var guard = 0;
     var self = this;
     function clashes() {
@@ -1617,7 +1697,10 @@
           Math.abs(o.y - node.y) < (o.h + node.h) / 2 + 10;
       });
     }
-    while (clashes() && guard++ < 80) node.y += node.h + 16;
+    while (clashes() && guard++ < 80) {
+      if (along === 'down') node.x += node.w + 16;
+      else node.y += node.h + 16;
+    }
   };
 
   Mindmap.prototype.addChild = function (parent) {
@@ -1657,7 +1740,7 @@
     };
     this.nodes.push(n);
     this._layout();
-    this._nudgeClear(n);
+    this._nudgeClear(n, grow);
     this.edges.push({ a: p.id, b: n.id });
     this.select(n);
     this._changed();
@@ -1821,12 +1904,12 @@
     this.nodes.forEach(function (n) {
       if (!seen[n.id] && !hid[n.id]) { roots.push(n); build(n.id); }
     });
-    // brothers and sisters keep the order they appear in on screen
-    Object.keys(tree).forEach(function (id) {
-      tree[id].sort(function (a, b) {
-        return down ? byId[a].x - byId[b].x : byId[a].y - byId[b].y;
-      });
-    });
+    /* Brothers and sisters keep the order they appear in on screen -- but
+       along whichever way THEIR OWN branch grows, which is settled below once
+       each branch's direction is known. Sorting every row by the map's
+       direction was wrong the moment one branch could run a different way: a
+       row running left to right was being ordered by height, so a node added
+       at the right-hand end could land anywhere in it, usually the left. */
 
     /* ---- which way each branch grows ----
        A node can carry a layout of its own, and then everything below it
@@ -1850,6 +1933,12 @@
       dirOf[id] = d;
       var mine = tree[id];
       if (!mine.length) { box[id] = { w: n.w, h: n.h }; return box[id]; }
+
+      // now that this branch's direction is known, put its children in the
+      // order they are lying in ALONG that direction
+      mine.sort(function (p, q) {
+        return d === 'down' ? byId[p].x - byId[q].x : byId[p].y - byId[q].y;
+      });
 
       var i, cb, run = 0, across = 0;
       if (d === 'down') {
@@ -2084,13 +2173,13 @@
       this.edges.push({ a: parent.id, b: node.id });
       delete node.free;
       this.arrange();
-      /* Read where it lands RELATIVE TO ITS NEW PARENT, not where it lands on
-         the canvas. Arranging shifts the whole map aside to make room, so the
-         absolute answer is correct about the map-after and useless on the map
-         you are looking at -- it put the ghost half a screen from the node it
-         was aiming at. The offset survives the shift; the parent carries it. */
-      var dx = node.x - parent.x, dy = node.y - parent.y;
-      var spot = { x: 0, y: 0, w: node.w, h: node.h };
+      /* Read it straight off. This used to be measured as an offset from the
+         new parent, because arranging shifted the whole map and an absolute
+         answer pointed off into space. Tidying now pins what is already on
+         the map, so nothing shifts and the absolute answer is the true one --
+         and measuring from the parent became the error instead, since the
+         parent is the one thing that DOES move as its row widens. */
+      var spot = { x: node.x, y: node.y, w: node.w, h: node.h };
 
       this.edges = edges;
       if (hadFree) node.free = hadFree;
@@ -2101,8 +2190,6 @@
         o.n._t0 = o.t0;
       });
       this._layout();
-      spot.x = parent.x + dx;          // beside the parent, where you are looking
-      spot.y = parent.y + dy;
       return spot;
     }
 
@@ -2980,7 +3067,9 @@
       var paint = this.paintOf(n, t);
       var y0 = n.y - n.h / 2;
 
-      var dropping = this._dropOn === n;
+      // nothing is lit up when the node is going BETWEEN two rather than under
+      // one: there is no node it is joining, only a place in a row
+      var dropping = this._dropOn === n && !this._dropBeside;
       this._shapePath(ctx, n);
       ctx.fillStyle = paint.fill;
       ctx.fill();
@@ -3131,64 +3220,43 @@
 
 
     /* The join being made. While a node is being carried onto another, the
-       line it is about to hang from is drawn between them, ends marked --
-       so you can see what it will join to before letting go, rather than
-       finding out afterwards. */
+       node it will join is lit up and the place it will land is outlined --
+       so you can see what will happen before letting go.
+
+       There was a train of shrinking arrowheads crawling between the two as
+       well. It said the same thing twice and said it loudest, and with the
+       landing outline now exact it was the noisiest part of a drag for the
+       least information. Gone. */
     if (this._drag && this._drag.moved && this._dropOn && this._drag.node) {
       var da = this._drag.node, db = this._dropOn;
-      var pa = borderPoint(da, db), pb = borderPoint(db, da);
-      /* Once the boxes overlap the two border points are almost on top of
-         each other, so the line all but disappears at the very moment it
-         matters. Give it a length of its own, pointing away from the node it
-         will hang from. */
-      var STUB = Math.max(46, 58 / this.cam.s);
-      var vx = pa.x - pb.x, vy = pa.y - pb.y;
-      var vlen = Math.hypot(vx, vy);
-      if (vlen < STUB) {
-        if (vlen < 0.5) {                    // dead centre: point at the node's middle
-          vx = da.x - db.x; vy = da.y - db.y;
-          vlen = Math.hypot(vx, vy) || 1;
-        }
-        pa = { x: pb.x + vx / vlen * STUB, y: pb.y + vy / vlen * STUB };
-      }
-      ctx.save();
-      // the node it will hang from, lit up rather than just outlined
-      this._shapePath(ctx, db);
-      ctx.globalAlpha = 0.22;
-      ctx.fillStyle = t.accent;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      /* A run of arrowheads travelling towards the node it has found, each
-         smaller than the one behind it -- a signal going somewhere, rather
-         than a line that happens to be there. */
-      var bx = pb.x - pa.x, by = pb.y - pa.y;
-      var blen = Math.hypot(bx, by) || 1;
-      var ux = bx / blen, uy = by / blen;
-      var ang = Math.atan2(uy, ux);
-      var big = Math.max(7, 10 / this.cam.s);
-      var stepB = big * 1.7;
-      var crawl = (Date.now() / 22) % stepB;
-      ctx.fillStyle = t.accent;
-      for (var d = crawl; d < blen; d += stepB) {
-        var along = d / blen;                       // 0 at your hand, 1 at the target
-        var size = big * (1 - 0.62 * along);        // shrinking as it arrives
-        var px2 = pa.x + ux * d, py2 = pa.y + uy * d;
-        ctx.globalAlpha = 0.3 + 0.7 * along;
-        ctx.beginPath();
-        ctx.moveTo(px2 + Math.cos(ang) * size, py2 + Math.sin(ang) * size);
-        ctx.lineTo(px2 + Math.cos(ang + 2.5) * size * 0.8,
-                   py2 + Math.sin(ang + 2.5) * size * 0.8);
-        ctx.lineTo(px2 + Math.cos(ang - 2.5) * size * 0.8,
-                   py2 + Math.sin(ang - 2.5) * size * 0.8);
-        ctx.closePath();
+      /* Lighting a node up means "this is the one you are joining". Going
+         BETWEEN two nodes joins neither of them, so lighting either would be
+         a lie about what is going to happen -- the slot itself is the answer,
+         and the outline below is where it is. */
+      if (!this._dropBeside) {
+        ctx.save();
+        this._shapePath(ctx, db);
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = t.accent;
         ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.restore();
       }
-      ctx.globalAlpha = 1;
-      ctx.restore();
 
-      /* And where it is going to sit once it gets there. */
+      /* And where it is going to sit once it gets there -- but only while
+         that is near your hand.
+
+         Tidying can settle a node a long way from the spot you are holding it
+         over, and an outline drawn way off across the map is not a preview of
+         anything you can see: it reads as the node being flung somewhere. The
+         lit-up target already says what it will join. Past arm's reach the
+         outline is simply not drawn. */
       var spot = this.landingSpot(db, da);
+      var near = Math.max(200, this.gapX + Math.max(da.w, da.h) * 0.5);
+      /* A slot in a row is by definition where your hand already is, and it
+         is the only thing shown for that drop -- so it is never withheld. */
+      if (spot && !this._dropBeside &&
+          Math.hypot(spot.x - da.x, spot.y - da.y) > near) spot = null;
       if (spot) {
         ctx.save();
         ctx.setLineDash([6 / this.cam.s, 5 / this.cam.s]);
@@ -3212,7 +3280,6 @@
         ctx.stroke();
         ctx.restore();
       }
-      this._beaming = true;
     }
 
     /* The corner grip on the chosen picture, for dragging it bigger. */
@@ -3437,6 +3504,7 @@
         self._picSize = null;
         self._picMove = false;
         self._dropOn = null;
+        self._dropBeside = null;
         self._rightPanned = false;
         self._drag = { pan: true, sx: p.x, sy: p.y, cx: self.cam.x, cy: self.cam.y,
                        right: e.button === 2 };
@@ -3789,7 +3857,10 @@
             if (off.indexOf(d) === -1) off.push(d);
           });
         });
-        self._dropOn = self.kissing(self._drag.node, off);
+        // where the hand is, not where the middle of the load is
+        var aim = self.dropTarget(self._drag.node, off, p);
+        self._dropOn = aim && aim.node;
+        self._dropBeside = aim && aim.beside;
         self.draw();
       }
     });
@@ -3963,7 +4034,11 @@
         });
         if (landing.length > 1 && self.opts.onHung) self.opts.onHung(landing.length);
         self.selectMany(group);
+        if (self._dropBeside && landing.length === 1 && self.opts.onSlotted) {
+          self.opts.onSlotted(self._dropBeside);   // into a row, not under a node
+        }
         self._dropOn = null;
+        self._dropBeside = null;
         self._changed();
       } else if (self._drag && self._drag.moved) {
         /* Let go in open space. If it came off its branch on the way it is a
@@ -3972,6 +4047,7 @@
            the moment it was detached. */
         if (self._drag.cuts && self._drag.cuts.length) self._drag.node.free = true;
         self._dropOn = null;
+        self._dropBeside = null;
         self._changed();
       }
       if (self._pointers.size === 0) self._drag = null;

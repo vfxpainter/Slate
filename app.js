@@ -4289,6 +4289,7 @@ function toggleImgFree() {
         onNodeMenu: function (node, x, y) { showNodeMenu(x, y); },
         onCut: function (many) { toast(plural(many, 'link') + ' cut — Ctrl+Z to undo'); },
         onHung: function (many) { toast(plural(many, 'node') + ' moved under it'); },
+        onSlotted: function () { toast('Dropped into the row'); },
         onPicSelect: function () { renderMapTools(S.map.selected); },
         onCam: function (scale) {
           var z = $('mapZoom');
